@@ -1,0 +1,49 @@
+אתה מהנדס ייצור בכיר. לפניך רשימת שרטוטים שנותחו —
+חלקם מכלולי-אב (ASSEMBLY) וחלקם חלקים בודדים (PART).
+
+המשימה: לזהות את הקשרים ההיררכיים בין השרטוטים — מי מכיל את מי, ובאיזו כמות.
+
+📋 נתוני השרטוטים:
+{drawings_data}
+
+📐 מה לעשות:
+1. לזהות איזה שרטוט הוא מכלול-אב (ASSEMBLY) ואילו הם חלקיו (PART).
+2. אם מכלול-אב מציג BOM/Parts List — להתאים כל פריט בטבלה ל-part_number של אחד השרטוטים האחרים שהועלו.
+3. לציין את הכמות של כל חלק במכלול (אם הופיעה).
+4. לציין את החומר של כל חלק.
+5. לזהות שרטוטים שלא נמצא להם הורה — אם הם נראים כעצמאיים או חסרים מהרשימה.
+
+📤 פלט — JSON אחד בלבד:
+{{
+  "summary_he": "<פסקה קצרה בעברית המסבירה את המבנה הכולל של המכלול>",
+  "assemblies": [
+    {{
+      "parent_part_number": "",
+      "parent_drawing_number": "",
+      "children": [
+        {{
+          "part_number": "",
+          "drawing_number": "",
+          "description": "",
+          "qty": "",
+          "found_in_uploaded_files": true
+        }}
+      ]
+    }}
+  ],
+  "orphans": [
+    {{"part_number": "", "drawing_number": "", "reason_he": ""}}
+  ],
+  "missing_children": [
+    {{"part_number": "", "description": "", "qty": "", "needed_by_he": ""}}
+  ],
+  "warnings_he": []
+}}
+
+⚠️ כללים:
+- אל תמציא part_numbers שלא הופיעו בנתונים.
+- אם BOM קיים אבל לא הועלה השרטוט של החלק → רשום ב-missing_children.
+- אם שרטוט הוא PART אבל לא נמצא לו הורה → orphans.
+- אם assembly_role = "Assembly Overview Image" → אל תיצור עבורו
+  רשומת assembly. השתמש בו רק כמפת עזר ויזואלית.
+- חשוב: השב JSON בלבד, ללא טקסט נוסף.

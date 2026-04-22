@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.Python
+venv/
+env/
+.venv/
+
+# Environment
+.env
+*.env
+!.env.example
+
+# Output
+output/*.json
+output/*.xlsx
+output/*.txt
+output/*.jsonl
+output/*.pdf
+output/.cache/
+output/_runtime_settings.json
+!output/.gitkeep
+
+# Test drawings (user-specific, often confidential)
+draws/
+
+# Backup files
+*.bak
+*.orig
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Claude Code local files
+.claude/
+
+# Temp files
+*.tmp
+_asm_temp_*

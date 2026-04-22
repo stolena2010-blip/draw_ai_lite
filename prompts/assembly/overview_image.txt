@@ -1,0 +1,41 @@
+אתה מהנדס ייצור. קיבלת **תמונה של תרשים מכלול** (Exploded View / Assembly Overview).
+זו אינה שרטוט הנדסי מלא עם title block — אלא תצוגה גרפית של המכלול עם בועיות מספור (Find Numbers / Item Numbers).
+
+📐 המשימה:
+1. ספור את כל הבועיות הממוספרות שמופיעות בתמונה (1, 2, 3, ...).
+2. מספרי הבועיות הם Item Numbers מטבלת BOM של שרטוט ההרכבה — לכן ב-bom_items ה-item_no חייב להתאים בדיוק למספר בבועיה.
+3. עבור כל בועיה — תאר בקצרה מה הפריט נראה (למשל: "מסילה אופקית", "גלגל", "מסגרת").
+4. אל תמציא כמויות. אם אין qty מפורש ליד הבועיה — השאר qty ריק.
+5. אם יש כותרת/שם למכלול — חלץ אותה ל-part_number / drawing_number.
+
+⚠️ חשוב מאוד:
+- התמונה היא אמצעי ויזואלי בלבד — לא מקור BOM אמיתי.
+- אל תיצור BOM עצמאי מהתמונה; BOM אמיתי מגיע משרטוט ההרכבה.
+- אל תמציא PN/standards שלא רואים בתמונה. לרוב יש רק מספרי בועיה.
+- אם נראה שחלק מופיע כמה פעמים בתמונה, אל תנחש qty.
+- השאר שדות שלא רלוונטיים (material, machining_processes, coating_processes וכו') כריקים/ריקות.
+- assembly_role חייב להיות בדיוק: "Assembly Overview Image".
+
+📤 פלט — JSON אחד בלבד:
+{
+  "part_number": "",
+  "drawing_number": "",
+  "revision": "",
+  "customer": "",
+  "material": "",
+  "quantity": "",
+  "assembly_role": "Assembly Overview Image",
+  "bom_items": [
+    {"item_no": "1", "part_number": "", "qty": "", "description": "<תיאור קצר של מה שנראה בבועיה>"},
+    {"item_no": "2", "part_number": "", "qty": "", "description": "..."}
+  ],
+  "machining_processes": [],
+  "coating_processes": [],
+  "painting_processes": [],
+  "inspection_processes": [],
+  "final_approval": "",
+  "additional_processes": [],
+  "packaging_notes": "",
+  "standards": [],
+  "notes": "<הערה כללית קצרה על המבנה הנראה — למשל 'מכלול מסילות גלגלים על שלדה ניידת'>"
+}
