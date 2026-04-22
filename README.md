@@ -1,5 +1,7 @@
 # 📐 DrawingAI Lite
 
+[![CI](https://github.com/stolena2010-blip/draw_ai_lite/actions/workflows/ci.yml/badge.svg)](https://github.com/stolena2010-blip/draw_ai_lite/actions/workflows/ci.yml)
+
 אפליקציית Streamlit לניתוח שרטוטים טכניים (PDF) באמצעות Azure OpenAI Vision / Reasoning.
 
 ## תכולה

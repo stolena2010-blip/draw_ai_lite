@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-heb
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run exception tests (standalone)
+        run: python tests/test_exceptions.py
+
+      - name: Run pytest suite
+        run: pytest tests/ -v
+
+      - name: Verify module imports
+        run: |
+          python -c "
+          import core.exceptions
+          import core.ai_helpers
+          import core.drawing_cache
+          import core.azure_client
+          import core.extractor
+          import core.assembly
+          import core.ocr_fallback
+          import core.pdf_utils
+          import core.two_pass
+          import core.validators
+          import core.cost_tracker
+          import core.master_matcher
+          import core.prompts
+          import core.assembly_prompts
+          from storage import save_handler, pdf_report
+          print('All modules import cleanly')
+          "
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff (non-blocking)
+        run: ruff check core/ storage/ tests/ app.py ui_assembly.py --output-format=github
+        continue-on-error: true
