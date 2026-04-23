@@ -10,7 +10,12 @@ import pandas as pd
 import streamlit as st
 
 from core.extractor import extract_drawing
-from core.azure_client import get_deployment, is_reasoning_model
+from core.azure_client import (
+    get_deployment, is_reasoning_model, 
+    save_runtime_settings, get_masters_xlsx_path,
+    is_fallback_enabled, enabled_modes, SUPPORTED_MODELS,
+    MODEL_GPT_4O, MODEL_GPT_5_4
+)
 from core.cost_tracker import get_aggregate_stats
 from core.ocr_fallback import is_ocr_available
 from core.exceptions import format_error_for_ui, get_streamlit_level
@@ -411,6 +416,17 @@ def _show_admin_cost_panel():
         help="בחר אילו מצבים יוצגו למשתמש בממשק",
     )
 
+    st.divider()
+    st.markdown("#### 📁 נתיבים")
+    _current_masters_path = get_masters_xlsx_path()
+    _new_masters_path = st.text_input(
+        "📄 נתיב ל-Masters.xlsx",
+        value=_current_masters_path,
+        placeholder="C:\\Data\\Masters.xlsx או השאר ריק לברירת מחדל",
+        help="נתיב מוחלט או יחסי לקובץ Masters.xlsx. אם ריק, יחפש ב-root ב-.env",
+        key="admin_masters_path",
+    )
+
     if not _new_modes:
         st.error("חובה לבחור לפחות מצב עבודה אחד")
     else:
@@ -418,6 +434,7 @@ def _show_admin_cost_panel():
             _new_model != _current_model
             or _new_fb != is_fallback_enabled()
             or set(_new_modes) != set(_current_modes)
+            or _new_masters_path != _current_masters_path
         )
         if _settings_changed:
             if st.button("💾 שמור הגדרות מערכת", use_container_width=True):
@@ -425,6 +442,7 @@ def _show_admin_cost_panel():
                     active_model=_new_model,
                     fallback_enabled=_new_fb,
                     enabled_modes=_new_modes,
+                    masters_xlsx_path=_new_masters_path,
                 )
                 if st.session_state.get("app_mode") not in _new_modes:
                     st.session_state["app_mode"] = _new_modes[0]
@@ -444,10 +462,16 @@ if st.session_state.get("_show_admin"):
     _show_admin_cost_panel()
 
 # ─── אזהרה אם Masters.xlsx חסר ───
-if not Path("Masters.xlsx").exists():
+_current_masters_full_path = get_masters_xlsx_path() or "Masters.xlsx"
+_current_masters_check = Path(_current_masters_full_path) if _current_masters_full_path else Path("Masters.xlsx")
+
+if not _current_masters_check.exists():
     st.warning(
-        "⚠️ קובץ **Masters.xlsx** חסר! התאמת מאסטרים לא תפעל. "
-        "העתק את הקובץ לשורש הפרויקט כדי להפעיל את התכונה."
+        f"⚠️ קובץ **Masters.xlsx** חסר! התאמת מאסטרים לא תפעל.  \n\n"
+        f"**נתיב המחפוש:** `{_current_masters_check}`  \n\n"
+        f"**פתרונות:**\n"
+        f"1. העתק את הקובץ ל-`{_current_masters_check}`\n"
+        f"2. או הגדר את הנתיב בפאנל הגדרות מנהל (⚙️) או ב-`.env`"
     )
 
 

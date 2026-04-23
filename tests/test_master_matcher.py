@@ -8,14 +8,21 @@ import pandas as pd
 import pytest
 
 from core.master_matcher import (
+    _collect_coating_codes,
+    _collect_coating_types,
+    _compound_label,
+    _dedupe_matches,
     _detect_color,
     _detect_phosphorus_level,
     _detect_type,
     _extract_std_codes,
     _extract_thickness_range,
     _extract_type_class,
+    _master_covers_types,
     _ranges_overlap,
     _score_master,
+    find_compound_masters,
+    match_all_coatings,
 )
 
 
@@ -183,3 +190,149 @@ class TestScoreMaster:
         score, _ = _score_master(coating, master)
         # סוגים שונים → ציון נמוך / שלילי
         assert score < 20
+
+
+# ─────────────────────────────────────────────
+# Compound matching (Silver over Nickel וכו')
+# ─────────────────────────────────────────────
+class TestCompoundHelpers:
+    def test_collect_types_multiple(self):
+        coats = [
+            {"type": "Silver Plating"},
+            {"type": "Electroless Nickel High Phosphorus"},
+        ]
+        assert _collect_coating_types(coats) == {"silver", "electroless_nickel"}
+
+    def test_collect_types_single_ignored(self):
+        coats = [{"type": "Zinc Plating"}]
+        assert _collect_coating_types(coats) == {"zinc"}
+
+    def test_collect_codes_merges(self):
+        coats = [
+            {"standard": "ASTM B700-20 PS-111.21"},
+            {"standard": "MIL-C-26074 PS-111.21"},
+        ]
+        codes = _collect_coating_codes(coats)
+        # PS111.21 + ASTMB700 + MILC26074
+        assert len(codes) >= 3
+
+    def test_master_covers_types_all(self):
+        covered = _master_covers_types(
+            "SILVER OVER ELECTROLESS NICKEL",
+            {"silver", "electroless_nickel"},
+        )
+        assert covered == {"silver", "electroless_nickel"}
+
+    def test_master_covers_types_partial(self):
+        covered = _master_covers_types(
+            "SILVER PLATING ONLY",
+            {"silver", "electroless_nickel"},
+        )
+        # מכסה רק silver — לא עונה על הדרישה המלאה
+        assert covered == {"silver"}
+
+    def test_compound_label_english_and_hebrew(self):
+        coats = [
+            {"type": "Silver Plating", "type_he": "כסף"},
+            {"type": "Electroless Nickel", "type_he": "ניקל אלקטרולס"},
+        ]
+        en, he = _compound_label(coats)
+        assert "Silver" in en and "Nickel" in en
+        assert "over" in en
+        assert "כסף" in he and "ניקל" in he
+
+
+class TestFindCompoundMasters:
+    """בדיקות שדורשות Masters.xlsx אמיתי."""
+
+    def test_silver_over_electroless_nickel_finds_compound(self):
+        """המקרה מהשרטוט BH07784A — אמור למצוא מאסטרים רלוונטיים."""
+        coats = [
+            {"type": "Silver Plating", "thickness": "3-5 micron",
+             "standard": "PS-111.21 ASTM B700-20"},
+            {"type": "Electroless Nickel High Phosphorus",
+             "thickness": "3-5 micron", "standard": "PS-111.21 MIL-C-26074"},
+        ]
+        matches = find_compound_masters(coats, top_n=5)
+        assert len(matches) > 0, "compound masters should be found"
+        # המאסטר הראשון אמור לכסות גם כסף וגם ניקל
+        top = matches[0]
+        assert "silver" in top["covers_types"]
+        assert "electroless_nickel" in top["covers_types"]
+
+    def test_single_type_returns_empty(self):
+        coats = [{"type": "Zinc Plating", "thickness": "8 micron",
+                  "standard": "ASTM B633"}]
+        assert find_compound_masters(coats) == []
+
+    def test_two_same_types_returns_empty(self):
+        coats = [
+            {"type": "Zinc Clear", "standard": "ASTM B633"},
+            {"type": "Zinc Black", "standard": "ASTM B633"},
+        ]
+        # שני ציפויי אבץ = 1 סוג → לא compound
+        assert find_compound_masters(coats) == []
+
+
+class TestMatchAllCoatingsCompound:
+    """end-to-end בדיקות של match_all_coatings עם לוגיקת compound."""
+
+    def test_compound_case_returns_single_merged_entry(self):
+        coats = [
+            {"type": "Silver Plating", "type_he": "כסף",
+             "thickness": "3-5 micron", "standard": "PS-111.21 ASTM B700-20"},
+            {"type": "Electroless Nickel High Phosphorus", "type_he": "ניקל אלקטרולס",
+             "thickness": "3-5 micron", "standard": "PS-111.21 MIL-C-26074"},
+        ]
+        result = match_all_coatings(coats, top_n=3)
+        assert len(result) == 1
+        assert result[0]["kind"] == "compound_coating"
+        assert result[0]["coating"]["compound"] is True
+        assert "layers" in result[0]["coating"]
+        assert len(result[0]["coating"]["layers"]) == 2
+
+    def test_single_coating_unchanged(self):
+        coats = [{"type": "Zinc Plating", "thickness": "8 micron",
+                  "standard": "ASTM B633", "rohs": True}]
+        result = match_all_coatings(coats, top_n=3)
+        assert len(result) == 1
+        assert result[0]["kind"] == "coating"
+        assert "compound" not in result[0]["coating"] or \
+               result[0]["coating"].get("compound") is not True
+
+
+class TestDedupeMatches:
+    def test_same_master_across_coatings_deduped(self):
+        entry1 = {
+            "coating": {"type": "A"}, "kind": "coating",
+            "matches": [{"master_id": "ms.100", "score": 50},
+                        {"master_id": "ms.200", "score": 40}],
+        }
+        entry2 = {
+            "coating": {"type": "B"}, "kind": "coating",
+            "matches": [{"master_id": "ms.100", "score": 30},  # duplicate, lower score
+                        {"master_id": "ms.300", "score": 45}],
+        }
+        cleaned = _dedupe_matches([entry1, entry2])
+        all_ids = []
+        for e in cleaned:
+            for m in e["matches"]:
+                all_ids.append(m["master_id"])
+        # ms.100 צריך להופיע פעם אחת בלבד
+        assert all_ids.count("ms.100") == 1
+        # והציון המוצג צריך להיות הגבוה יותר
+        for e in cleaned:
+            for m in e["matches"]:
+                if m["master_id"] == "ms.100":
+                    assert m["score"] == 50
+
+    def test_empty_list(self):
+        assert _dedupe_matches([]) == []
+
+    def test_no_duplicates_preserves_all(self):
+        entry1 = {"coating": {"type": "A"}, "kind": "coating",
+                  "matches": [{"master_id": "ms.1", "score": 50}]}
+        entry2 = {"coating": {"type": "B"}, "kind": "coating",
+                  "matches": [{"master_id": "ms.2", "score": 40}]}
+        cleaned = _dedupe_matches([entry1, entry2])
+        assert len(cleaned) == 2

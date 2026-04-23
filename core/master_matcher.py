@@ -13,15 +13,36 @@ Masters matcher — מציאת התאמת מאסטרים לציפויי השרט
 from __future__ import annotations
 
 import logging
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-MASTERS_PATH = Path(__file__).resolve().parent.parent / "Masters.xlsx"
+load_dotenv()
+
+# קריאה ממשתנה סביבה עם fallback לנתיב ברירת המחדל
+def _get_masters_path() -> Path:
+    """מחזיר את נתיב ה-Masters.xlsx הנוכחי (מ-runtime או מ-.env)."""
+    try:
+        from core.azure_client import get_masters_xlsx_path
+        custom_path = get_masters_xlsx_path()
+        if custom_path:
+            return Path(custom_path).resolve()
+    except (ImportError, Exception):
+        pass
+    
+    env_path = os.getenv("MASTERS_XLSX_PATH", "").strip()
+    if env_path:
+        return Path(env_path).resolve()
+    
+    return Path(__file__).resolve().parent.parent / "Masters.xlsx"
+
+MASTERS_PATH = _get_masters_path()
 
 
 # ─── ציון התאמה ───
@@ -71,16 +92,17 @@ _COLOR_KEYWORDS = {
 @lru_cache(maxsize=1)
 def load_masters() -> pd.DataFrame:
     """טעינת קובץ המאסטרים פעם אחת ושמירה ב-cache."""
-    if not MASTERS_PATH.exists():
-        logger.warning("Masters.xlsx not found at %s", MASTERS_PATH)
+    masters_path = _get_masters_path()
+    if not masters_path.exists():
+        logger.warning("Masters.xlsx not found at %s", masters_path)
         return pd.DataFrame(
             columns=["master_id", "desc", "standard", "thickness", "color", "col5", "rohs", "full_name"]
         )
-    df = pd.read_excel(MASTERS_PATH)
+    df = pd.read_excel(masters_path)
     df.columns = ["master_id", "desc", "standard", "thickness", "color", "col5", "rohs", "full_name"]
     for c in df.columns:
         df[c] = df[c].astype(str).fillna("").replace({"nan": "", "None": ""})
-    logger.info("Loaded %d masters from %s", len(df), MASTERS_PATH)
+    logger.info("Loaded %d masters from %s", len(df), masters_path)
     return df
 
 
@@ -347,21 +369,243 @@ def find_top_masters(coating: dict, top_n: int = 3, min_score: float = 15.0) -> 
     return scored[:top_n]
 
 
+# ─── Compound matching (Silver over Nickel וכו') ───
+_COMPOUND_KEYWORDS_RE = re.compile(r"\b(OVER|ON TOP|\+|PLUS)\b", re.IGNORECASE)
+
+# בונוס לציפוי שמכסה את *כל* סוגי הציפוי בשרטוט
+W_COMPOUND_COVERAGE = 50.0   # בונוס בסיס פר סוג שכוסה
+W_COMPOUND_OVER_BONUS = 20.0  # מאסטר שמסומן במפורש "OVER/+"
+MIN_COMPOUND_SCORE = 60.0    # סף לקבלת תוצאת compound כעיקרית
+
+
+def _collect_coating_types(coatings: list[dict]) -> set[str]:
+    """אוסף את כל סוגי הציפוי שזוהו באוסף הציפויים."""
+    types: set[str] = set()
+    for c in coatings:
+        if not isinstance(c, dict):
+            continue
+        t = _detect_type(_coating_text(c))
+        if t:
+            types.add(t)
+    return types
+
+
+def _collect_coating_codes(coatings: list[dict]) -> set[str]:
+    """אוסף את כל קודי התקן מאוסף הציפויים."""
+    codes: set[str] = set()
+    for c in coatings:
+        if not isinstance(c, dict):
+            continue
+        codes.update(_extract_std_codes(_coating_text(c)))
+    return codes
+
+
+def _master_covers_types(master_text_norm: str, required_types: set[str]) -> set[str]:
+    """מחזיר אילו סוגי ציפוי נמצאים בטקסט המאסטר (מתוך required_types)."""
+    covered: set[str] = set()
+    for t in required_types:
+        for kw in _TYPE_KEYWORDS.get(t, []):
+            if kw.upper() in master_text_norm:
+                covered.add(t)
+                break
+    return covered
+
+
+def _score_compound_master(coatings: list[dict], master: pd.Series,
+                            required_types: set[str],
+                            coat_codes: set[str]) -> tuple[float, dict]:
+    """
+    ציון מאסטר עבור מקרה של מספר ציפויים.
+
+    קריטריונים:
+    - המאסטר מכיל את *כל* סוגי הציפוי שמופיעים בשרטוט
+    - המאסטר מסומן כ-compound (OVER/+/PLUS) — בונוס נוסף
+    - התאמת קודי תקן
+    """
+    breakdown: dict = {}
+    master_text = f"{master['desc']} {master['standard']} {master['full_name']}"
+    master_norm = _norm(master_text)
+
+    covered = _master_covers_types(master_norm, required_types)
+    if covered != required_types:
+        # לא מכסה את כל הסוגים — לא רלוונטי כ-compound
+        return 0.0, {}
+
+    score = W_COMPOUND_COVERAGE * len(required_types)
+    breakdown["כיסוי סוגים"] = (score, ", ".join(sorted(required_types)))
+
+    # בונוס למאסטר compound מפורש
+    if _COMPOUND_KEYWORDS_RE.search(master_text):
+        score += W_COMPOUND_OVER_BONUS
+        breakdown["compound explicit"] = (W_COMPOUND_OVER_BONUS, "OVER/+")
+
+    # התאמת תקנים
+    master_codes = _extract_std_codes(master_text)
+    if coat_codes and master_codes:
+        common = coat_codes & master_codes
+        if common:
+            ratio = len(common) / max(len(coat_codes), 1)
+            s = W_STANDARD * ratio
+            score += s
+            breakdown["תקן"] = (s, ", ".join(sorted(common)))
+
+    # התאמת רמת זרחן (אם יש ניקל אלקטרולס בציפוי)
+    for c in coatings:
+        c_phos = _detect_phosphorus_level(_coating_text(c))
+        if not c_phos:
+            continue
+        m_phos = _detect_phosphorus_level(master_text)
+        if m_phos and c_phos == m_phos:
+            score += W_PHOSPHORUS
+            breakdown["רמת זרחן"] = (W_PHOSPHORUS, c_phos)
+            break
+        elif m_phos and c_phos != m_phos:
+            score += W_PHOSPHORUS_PENALTY
+            breakdown["רמת זרחן שונה"] = (W_PHOSPHORUS_PENALTY, f"{c_phos} vs {m_phos}")
+            break
+
+    # RoHS — אם כל הציפויים דורשים RoHS, המאסטר צריך לציין RoHS
+    all_rohs = all(bool(c.get("rohs")) for c in coatings if isinstance(c, dict))
+    master_rohs = "ROHS" in master_norm
+    if all_rohs and master_rohs:
+        score += W_ROHS
+        breakdown["RoHS"] = (W_ROHS, "✓")
+    elif all_rohs and not master_rohs:
+        score += W_ROHS_PENALTY
+        breakdown["RoHS חסר"] = (W_ROHS_PENALTY, "drawing requires RoHS")
+
+    return score, breakdown
+
+
+def find_compound_masters(coatings: list[dict], top_n: int = 3,
+                           min_score: float = MIN_COMPOUND_SCORE) -> list[dict]:
+    """
+    מחפש מאסטרים שמכסים את כל סוגי הציפוי יחד (Silver over Nickel וכו').
+
+    מתאים כשיש 2+ ציפויים שזוהו בשרטוט. מחזיר רשימה ריקה אם:
+    - פחות מ-2 סוגי ציפוי זוהו
+    - אין מאסטר שמכסה את כל הסוגים בציון מעל הסף
+    """
+    required_types = _collect_coating_types(coatings)
+    if len(required_types) < 2:
+        return []
+
+    coat_codes = _collect_coating_codes(coatings)
+    df = load_masters()
+    if df.empty:
+        return []
+
+    scored = []
+    for _, row in df.iterrows():
+        score, breakdown = _score_compound_master(coatings, row, required_types, coat_codes)
+        if score >= min_score:
+            scored.append({
+                "master_id": row["master_id"],
+                "desc": row["desc"],
+                "standard": row["standard"],
+                "thickness": row["thickness"],
+                "full_name": row["full_name"].replace("\\\\", " | ").replace("\\", " | "),
+                "score": round(score, 1),
+                "breakdown": breakdown,
+                "covers_types": sorted(required_types),
+            })
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:top_n]
+
+
+def _compound_label(coatings: list[dict]) -> tuple[str, str]:
+    """בונה תווית compound: ('Silver over Electroless Nickel', 'כסף מעל ניקל אלקטרולס')."""
+    types_en = []
+    types_he = []
+    for c in coatings:
+        if not isinstance(c, dict):
+            continue
+        en = (c.get("type") or c.get("name") or "").strip()
+        he = (c.get("type_he") or "").strip()
+        if en:
+            types_en.append(en)
+        if he:
+            types_he.append(he)
+    en_label = " over ".join(types_en) if types_en else ""
+    he_label = " מעל ".join(types_he) if types_he else ""
+    return en_label, he_label
+
+
+def _dedupe_matches(per_coating_results: list[dict]) -> list[dict]:
+    """
+    מסיר כפילויות של master_id בין ציפויים שונים.
+    שומר את ההתאמה עם הציון הגבוה ביותר לכל מאסטר.
+    """
+    # איתור הציון המקסימלי לכל master_id
+    best_score: dict[str, float] = {}
+    for entry in per_coating_results:
+        for m in entry.get("matches", []) or []:
+            mid = m.get("master_id")
+            if mid is None:
+                continue
+            sc = float(m.get("score") or 0)
+            if mid not in best_score or sc > best_score[mid]:
+                best_score[mid] = sc
+
+    seen: set[str] = set()
+    cleaned = []
+    for entry in per_coating_results:
+        filtered = []
+        for m in entry.get("matches", []) or []:
+            mid = m.get("master_id")
+            sc = float(m.get("score") or 0)
+            # שמור את המופע המוביל של כל מאסטר פעם אחת בלבד
+            if mid in seen:
+                continue
+            if mid in best_score and sc < best_score[mid]:
+                # זו לא הגרסה הטובה ביותר — דלג
+                continue
+            seen.add(mid)
+            filtered.append(m)
+        if filtered:
+            entry = {**entry, "matches": filtered}
+            cleaned.append(entry)
+    return cleaned
+
+
 def match_all_coatings(coating_processes: list, painting_processes: list | None = None,
                         top_n: int = 3) -> list[dict]:
-    """מחזיר רשימת התאמות לכל ציפוי בשרטוט.
+    """מחזיר רשימת התאמות לציפויי השרטוט.
+
+    לוגיקה:
+    1. אם יש 2+ ציפויים מסוגים שונים → ניסיון compound matching (Silver over Nickel וכו').
+       אם נמצא מאסטר עם ציון >= MIN_COMPOUND_SCORE → מוחזר כתוצאה יחידה.
+    2. אחרת (או אם compound נכשל) — התאמה לכל ציפוי בנפרד + dedupe של כפילויות.
 
     הערה: מאסטרים מתבצעים רק על coating_processes — לא על צביעות.
-    הפרמטר painting_processes נשמר לתאימות לאחור אך מתעלמים ממנו.
+    הפרמטר painting_processes נשמר לתאימות לאחור.
     """
+    coats = [c for c in (coating_processes or []) if isinstance(c, dict)]
+
+    # ─── שלב 1: נסה compound matching ───
+    if len(coats) >= 2:
+        compound_matches = find_compound_masters(coats, top_n=top_n)
+        if compound_matches:
+            en_label, he_label = _compound_label(coats)
+            return [{
+                "coating": {
+                    "type": en_label or "Compound Coating",
+                    "type_he": he_label or "ציפוי מרובה-שכבות",
+                    "compound": True,
+                    "layers": coats,
+                },
+                "kind": "compound_coating",
+                "matches": compound_matches,
+            }]
+
+    # ─── שלב 2: התאמה לכל ציפוי + dedupe ───
     results = []
-    for coat in (coating_processes or []):
-        if not isinstance(coat, dict):
-            continue
+    for coat in coats:
         matches = find_top_masters(coat, top_n=top_n)
         results.append({
             "coating": coat,
             "kind": "coating",
             "matches": matches,
         })
-    return results
+    return _dedupe_matches(results)

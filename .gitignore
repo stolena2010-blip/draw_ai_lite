@@ -30,6 +30,10 @@ draws/
 *.bak
 *.orig
 
+# Excel lock files (created when file open)
+~$*.xlsx
+~$*.xls
+
 # IDE
 .vscode/
 .idea/

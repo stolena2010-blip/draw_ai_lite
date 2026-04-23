@@ -6,9 +6,28 @@
 
 ---
 
-## [Unreleased] — 22/04/2026
+## [Unreleased] — 23/04/2026
 
-### 🛡️ Reliability & DX (סוף יום)
+### 🎯 Compound Master Matching (תיקון באג מהנדס)
+- **`find_compound_masters()`** ב-`core/master_matcher.py` — לוגיקה חדשה
+  לזיהוי ציפויים מרובי-שכבות (Silver over Nickel, Tin over Electroless Nickel וכו').
+  המאגר מכיל **145 מאסטרים compound** שלא נוצלו קודם.
+- **`match_all_coatings()`** עודכן: אם זוהו 2+ סוגי ציפוי שונים → מנסה
+  קודם למצוא מאסטר compound שמכסה את כולם יחד, ומחזיר תוצאה מאוחדת
+  (`kind="compound_coating"`). אחרת חוזר להתנהגות הרגילה + dedupe.
+- **`_dedupe_matches()`** — מונע הצגת אותו `master_id` פעמיים כשציפויים
+  שונים מחזירים את אותה התאמה (הבאג המקורי).
+- **13 unit tests חדשים** ב-`tests/test_master_matcher.py` (compound +
+  dedupe + edge cases).
+
+**דוגמה מתועדת:** שרטוט `BH07784A` עם "ELECTROLYTIC SILVER PLATING OVER
+ELECTROLESS NICKEL HIGH PHOSPHOROUS PER PS-111.21":
+- **לפני התיקון:** 2 רשומות של `ms.2805` (Electroless Nickel בלבד — שגוי)
+- **אחרי התיקון:** רשומה אחת עם `ms.1101` (Silver over Electroless Nickel
+  High Phosphorus, score 145), בתוספת `ms.1376`, `ms.1000`, `ms.4247`
+  כחלופות.
+
+### 🛡️ Reliability & DX (יום קודם)
 - **`core/exceptions.py`** — 15 custom exceptions בהיררכיה (Configuration / Input /
   AI / Extraction / OCR). כל אחת עם `user_message`, `suggestion`, `severity`
   ו-emoji. helper `format_error_for_ui()` מציג Markdown ידידותי ב-Streamlit
