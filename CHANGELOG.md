@@ -8,6 +8,17 @@
 
 ## [Unreleased] — 23/04/2026
 
+### 🐛 Fix: Compound matching לא הופעל עם Silver OVER Nickel (23/04 late)
+- **סיבה:** ה-`name` של ציפוי הכסף הכיל את התיאור "OVER ELECTROLESS NICKEL",
+  ו-`_detect_type` סרק את כל הטקסט — מצא "ELECTROLESS" ראשון וחזר
+  `electroless_nickel` במקום `silver`. שני הציפויים סווגו באותו הסוג,
+  `find_compound_masters` לא הופעל, והתוצאה נפלה ל-fallback עם ms.2805.
+- **תיקון:** `_detect_primary_type()` חדש — בודק רק את `type` / `type_he`,
+  לא את ה-`name` המלא. `_collect_coating_types` מעדכן בהתאם.
+- **הרחבה:** מילות מפתח בעברית נוספו ל-silver/gold/copper/tin (כסף/זהב/נחושת/בדיל).
+- **CACHE_VERSION v3 → v4** כדי לבטל תוצאות שגויות שנשמרו.
+- 6 בדיקות יחידה חדשות (TestDetectPrimaryType + regression test מ-BH07784A).
+
 ### 🎯 Compound Master Matching (תיקון באג מהנדס)
 - **`find_compound_masters()`** ב-`core/master_matcher.py` — לוגיקה חדשה
   לזיהוי ציפויים מרובי-שכבות (Silver over Nickel, Tin over Electroless Nickel וכו').

@@ -69,10 +69,10 @@ _TYPE_KEYWORDS = {
     "passivation": ["PASSIVAT", "פסיבציה"],
     "cadmium": ["CADMIUM"],
     "chrome": ["CHROME", "CHROMIUM", "כרום"],
-    "tin": ["TIN PLAT"],
-    "silver": ["SILVER"],
-    "gold": ["GOLD"],
-    "copper": ["COPPER"],
+    "tin": ["TIN PLAT", "בדיל"],
+    "silver": ["SILVER", "כסף"],
+    "gold": ["GOLD", "זהב"],
+    "copper": ["COPPER", "נחושת"],
     "black_oxide": ["BLACK OXIDE", "BLACKENING"],
     "phosphate": ["PHOSPHATE"],
 }
@@ -378,13 +378,36 @@ W_COMPOUND_OVER_BONUS = 20.0  # מאסטר שמסומן במפורש "OVER/+"
 MIN_COMPOUND_SCORE = 60.0    # סף לקבלת תוצאת compound כעיקרית
 
 
+def _detect_primary_type(coating: dict) -> str | None:
+    """
+    מזהה את הסוג העיקרי של ציפוי — משתמש ב-type/type_he קודם, לא בטקסט המלא.
+
+    חשוב: תיאור של "Silver OVER Electroless Nickel" מופיע לעיתים ב-name
+    של הציפוי העליון (Silver). אם נסרוק את כל הטקסט, נחשוב בטעות
+    שהציפוי הוא electroless_nickel (בגלל המילה "ELECTROLESS" בתיאור).
+    לכן נבודד את זיהוי הסוג ל-type / type_he בלבד.
+    """
+    for field in ("type", "type_he"):
+        text = str(coating.get(field) or "").strip()
+        if text:
+            t = _detect_type(text)
+            if t:
+                return t
+    # fallback — סריקה מלאה (רק אם type/type_he ריקים)
+    return _detect_type(_coating_text(coating))
+
+
 def _collect_coating_types(coatings: list[dict]) -> set[str]:
-    """אוסף את כל סוגי הציפוי שזוהו באוסף הציפויים."""
+    """אוסף את כל סוגי הציפוי שזוהו באוסף הציפויים.
+
+    משתמש ב-_detect_primary_type — בודק type/type_he בלבד כדי להימנע
+    משגיאות זיהוי כש-name מכיל תיאור של שכבה אחרת (Silver OVER Nickel).
+    """
     types: set[str] = set()
     for c in coatings:
         if not isinstance(c, dict):
             continue
-        t = _detect_type(_coating_text(c))
+        t = _detect_primary_type(c)
         if t:
             types.add(t)
     return types

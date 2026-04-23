@@ -14,6 +14,7 @@ from core.master_matcher import (
     _dedupe_matches,
     _detect_color,
     _detect_phosphorus_level,
+    _detect_primary_type,
     _detect_type,
     _extract_std_codes,
     _extract_thickness_range,
@@ -195,6 +196,40 @@ class TestScoreMaster:
 # ─────────────────────────────────────────────
 # Compound matching (Silver over Nickel וכו')
 # ─────────────────────────────────────────────
+class TestDetectPrimaryType:
+    """הגנה מפני false-positive כש-name מכיל תיאור של שכבה אחרת."""
+
+    def test_silver_coating_with_nickel_in_description(self):
+        """ציפוי כסף שה-name שלו מציין 'OVER ELECTROLESS NICKEL' — צריך להיות silver, לא electroless_nickel."""
+        silver = {
+            "type": "Silver Plating",
+            "type_he": "כסף",
+            "name": "ELECTROLYTIC SILVER PLATING, 3-5 μm THICK, OVER "
+                    "HIGH PHOSPHOROUS ELECTROLESS NICKEL, 3-5μm THICK PER PS-111.21",
+            "standard": "PS-111.21",
+        }
+        assert _detect_primary_type(silver) == "silver"
+
+    def test_electroless_nickel_detected_normally(self):
+        en = {
+            "type": "Electroless Nickel",
+            "type_he": "ניקל אלקטרולס",
+            "name": "HIGH PHOSPHOROUS ELECTROLESS NICKEL, 3-5μm THICK PER PS-111.21",
+        }
+        assert _detect_primary_type(en) == "electroless_nickel"
+
+    def test_hebrew_silver_label(self):
+        assert _detect_primary_type({"type_he": "כסף"}) == "silver"
+
+    def test_hebrew_gold_label(self):
+        assert _detect_primary_type({"type_he": "זהב"}) == "gold"
+
+    def test_fallback_to_full_text_when_type_empty(self):
+        """אם type/type_he ריקים — נופל חזרה לסריקת טקסט מלא."""
+        coat = {"type": "", "type_he": "", "name": "ZINC PLATING"}
+        assert _detect_primary_type(coat) == "zinc"
+
+
 class TestCompoundHelpers:
     def test_collect_types_multiple(self):
         coats = [
@@ -299,6 +334,40 @@ class TestMatchAllCoatingsCompound:
         assert result[0]["kind"] == "coating"
         assert "compound" not in result[0]["coating"] or \
                result[0]["coating"].get("compound") is not True
+
+    def test_bh07784a_drawing_bug_regression(self):
+        """הרגרסיה מהשרטוט BH07784A: Silver OVER EN High P — צריך להחזיר compound.
+
+        הבאג שמופיע כשה-name של הציפוי העליון (Silver) מכיל את תיאור
+        השכבה התחתונה (ELECTROLESS NICKEL). לפני התיקון — שני הציפויים
+        זוהו כ-electroless_nickel וה-compound matcher לא הופעל.
+        """
+        silver = {
+            "type": "Silver Plating",
+            "type_he": "כסף",
+            "name": "ELECTROLYTIC SILVER PLATING, 3-5 μm THICK, OVER "
+                    "HIGH PHOSPHOROUS ELECTROLESS NICKEL, 3-5μm THICK "
+                    "PER PS-111.21 (RAFDOCS-434847)",
+            "standard": "PS-111.21 (RAFDOCS-434847)",
+            "thickness": "3-5 μm",
+        }
+        en = {
+            "type": "Electroless Nickel",
+            "type_he": "ניקל אלקטרולס",
+            "name": "HIGH PHOSPHOROUS ELECTROLESS NICKEL, 3-5μm THICK "
+                    "PER PS-111.21 (RAFDOCS-434847)",
+            "standard": "PS-111.21 (RAFDOCS-434847)",
+            "thickness": "3-5 μm",
+        }
+        result = match_all_coatings([silver, en], top_n=3)
+        assert len(result) == 1
+        assert result[0]["kind"] == "compound_coating"
+        # הראשון צריך להיות Silver over Electroless Nickel (ms.1101)
+        top = result[0]["matches"][0]
+        assert "silver" in top["covers_types"]
+        assert "electroless_nickel" in top["covers_types"]
+        # לא אמור להיות ms.2805 (רק Electroless Nickel — לא מכסה Silver)
+        assert top["master_id"] != "ms.2805"
 
 
 class TestDedupeMatches:
