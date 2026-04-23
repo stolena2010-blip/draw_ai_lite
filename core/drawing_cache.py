@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 
 # העלאה כשמשנים את pipeline — מבטל cache ישן
 # v2: החזרת OCR-always-on ב-Stage 1 (תיקון regression: material wrong)
-CACHE_VERSION = "v2"
+# v3: Compound master matching (Silver over Nickel וכו') — מחייב הרצה מחדש
+CACHE_VERSION = "v3"
 
 _CACHE_DIR = Path("output/.cache")
 
