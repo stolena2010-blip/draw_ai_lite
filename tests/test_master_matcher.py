@@ -8,6 +8,14 @@ import pandas as pd
 import pytest
 
 from core.master_matcher import (
+    STATUS_FULL,
+    STATUS_NA,
+    STATUS_NONE,
+    STATUS_PARTIAL,
+    _classify_rohs,
+    _classify_standards_match,
+    _classify_thickness_match,
+    _classify_type_match,
     _collect_coating_codes,
     _collect_coating_types,
     _compound_label,
@@ -22,6 +30,7 @@ from core.master_matcher import (
     _master_covers_types,
     _ranges_overlap,
     _score_master,
+    build_match_details,
     find_compound_masters,
     match_all_coatings,
 )
@@ -405,3 +414,101 @@ class TestDedupeMatches:
                   "matches": [{"master_id": "ms.2", "score": 40}]}
         cleaned = _dedupe_matches([entry1, entry2])
         assert len(cleaned) == 2
+
+
+# ─────────────────────────────────────────────
+# Match Details (פירוט התאמה להצגה ב-UI)
+# ─────────────────────────────────────────────
+class TestClassifyTypeMatch:
+    def test_identical_types_full(self):
+        assert _classify_type_match("silver", "silver")["status"] == STATUS_FULL
+
+    def test_close_types_partial(self):
+        assert _classify_type_match("nickel", "electroless_nickel")["status"] == STATUS_PARTIAL
+
+    def test_different_types_none(self):
+        assert _classify_type_match("silver", "zinc")["status"] == STATUS_NONE
+
+    def test_missing_coat_type_na(self):
+        assert _classify_type_match(None, "silver")["status"] == STATUS_NA
+
+
+class TestClassifyStandards:
+    def test_full_match_no_extras(self):
+        r = _classify_standards_match({"PS111.21"}, {"PS111.21"})
+        assert r["status"] == STATUS_FULL
+
+    def test_partial_when_master_has_extras(self):
+        r = _classify_standards_match({"PS111.21"}, {"PS111.21", "X1", "X2"})
+        assert r["status"] == STATUS_PARTIAL
+        assert "X1" in r["only_in_master"]
+
+    def test_none_when_no_overlap(self):
+        r = _classify_standards_match({"A"}, {"B"})
+        assert r["status"] == STATUS_NONE
+
+    def test_na_when_no_coat_codes(self):
+        r = _classify_standards_match(set(), {"PS111.21"})
+        assert r["status"] == STATUS_NA
+
+
+class TestClassifyThickness:
+    def test_full_on_high_overlap(self):
+        r = _classify_thickness_match((3.0, 5.0), (3.0, 5.0))
+        assert r["status"] == STATUS_FULL
+
+    def test_partial_on_small_overlap(self):
+        r = _classify_thickness_match((3.0, 5.0), (4.5, 10.0))
+        assert r["status"] == STATUS_PARTIAL
+
+    def test_none_when_no_overlap(self):
+        r = _classify_thickness_match((3.0, 5.0), (10.0, 15.0))
+        assert r["status"] == STATUS_NONE
+
+    def test_na_when_no_coat_thickness(self):
+        r = _classify_thickness_match(None, (3.0, 5.0))
+        assert r["status"] == STATUS_NA
+
+
+class TestClassifyRohs:
+    def test_na_when_drawing_no_rohs(self):
+        assert _classify_rohs(False, True)["status"] == STATUS_NA
+
+    def test_full_when_both_rohs(self):
+        assert _classify_rohs(True, True)["status"] == STATUS_FULL
+
+    def test_none_when_drawing_wants_rohs_master_doesnt(self):
+        assert _classify_rohs(True, False)["status"] == STATUS_NONE
+
+
+class TestBuildMatchDetails:
+    def test_all_criteria_present(self):
+        coating = {
+            "type": "Zinc Plating", "type_he": "אבץ",
+            "standard": "ASTM B633", "thickness": "8 micron",
+        }
+        master = {
+            "desc": "ZINC PLATING CHROMATE", "standard": "ASTM B633 TYPE II",
+            "thickness": "5-10 micron", "full_name": "",
+        }
+        details = build_match_details(coating, master)
+        assert "coating_type" in details
+        assert "standards" in details
+        assert "thickness" in details
+        assert "rohs" in details
+
+    def test_compound_layer_silver_in_compound_master(self):
+        """Silver-layer של ms.1101 (Silver over EN) — עם is_compound_layer=True."""
+        silver = {
+            "type": "Silver Plating", "type_he": "כסף",
+            "standard": "PS-111.21 ASTM B700-20", "thickness": "3-5 μm",
+        }
+        # ms.1101 master approximation
+        master = {
+            "desc": "Silver over Electroless Nickel High Phosphorus",
+            "standard": "QQ-S-365 Type 2 Grade B+MIL C 26074 Class 1",
+            "thickness": "10-15 mic", "full_name": "",
+        }
+        details = build_match_details(silver, master, is_compound_layer=True)
+        # coating_type צריך להיות "מלא" כי המאסטר מכיל "SILVER"
+        assert details["coating_type"]["status"] == STATUS_FULL

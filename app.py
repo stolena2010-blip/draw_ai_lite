@@ -39,6 +39,130 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 _SEVERITY_ICON = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🟢"}
 
+# אייקונים וצבעים לפירוט התאמה למאסטר
+_MATCH_ICON = {"full": "✅", "partial": "🟡", "none": "❌", "na": "⚪"}
+_MATCH_LABEL = {
+    "full": "התאמה מלאה",
+    "partial": "התאמה חלקית",
+    "none": "ללא התאמה",
+    "na": "לא רלוונטי",
+}
+_MATCH_BG = {
+    "full": "#d1e7dd",
+    "partial": "#fff3cd",
+    "none": "#f8d7da",
+    "na": "#e9ecef",
+}
+_CRIT_LABEL = {
+    "coating_type": "סוג ציפוי / תהליך",
+    "standards": "מפרטים (תקנים)",
+    "thickness": "עובי",
+    "rohs": "RoHS",
+    "phosphorus": "רמת זרחן",
+}
+
+
+def _format_criterion_detail(crit_key: str, info: dict) -> str:
+    """בונה טקסט קצר שמסביר מה נמצא עבור קריטריון מסוים."""
+    status = info.get("status", "na")
+    parts: list[str] = []
+
+    if crit_key == "coating_type":
+        coat = info.get("coat", "")
+        master = info.get("master") or info.get("note", "")
+        if status == "full":
+            parts.append(f"<code>{coat}</code> ↔ <code>{master or coat}</code>")
+        elif status == "partial":
+            parts.append(f"<code>{coat}</code> ~ <code>{master}</code>")
+        elif status == "none":
+            parts.append(f"<code>{coat}</code> ≠ <code>{master}</code>")
+        else:
+            parts.append(info.get("reason", ""))
+
+    elif crit_key == "standards":
+        if info.get("matched"):
+            parts.append("✓ התאימו: " + ", ".join(f"<code>{s}</code>" for s in info["matched"]))
+        if info.get("only_in_coat"):
+            parts.append("⚠️ רק בשרטוט: " + ", ".join(f"<code>{s}</code>" for s in info["only_in_coat"]))
+        if info.get("only_in_master"):
+            parts.append("ℹ️ רק במאסטר: " + ", ".join(f"<code>{s}</code>" for s in info["only_in_master"]))
+        if not parts:
+            parts.append(info.get("reason", ""))
+
+    elif crit_key == "thickness":
+        coat_range = info.get("coat_range")
+        master_range = info.get("master_range")
+        if coat_range and master_range:
+            cr = f"{coat_range[0]:.0f}-{coat_range[1]:.0f}μm"
+            mr = f"{master_range[0]:.0f}-{master_range[1]:.0f}μm"
+            parts.append(f"שרטוט <code>{cr}</code> ↔ מאסטר <code>{mr}</code>")
+            if info.get("overlap_pct") is not None:
+                parts.append(f"חפיפה {info['overlap_pct']}%")
+        elif coat_range:
+            cr = f"{coat_range[0]:.0f}-{coat_range[1]:.0f}μm"
+            parts.append(f"שרטוט <code>{cr}</code>")
+            parts.append(info.get("reason", ""))
+        else:
+            parts.append(info.get("reason", ""))
+
+    elif crit_key == "rohs":
+        parts.append(info.get("note") or info.get("reason", ""))
+
+    elif crit_key == "phosphorus":
+        if info.get("coat_phos"):
+            parts.append(f"שרטוט: <code>{info['coat_phos']}</code>")
+        if info.get("master_phos"):
+            parts.append(f"מאסטר: <code>{info['master_phos']}</code>")
+        if not parts:
+            parts.append(info.get("reason", ""))
+
+    return " &nbsp;·&nbsp; ".join(p for p in parts if p)
+
+
+def _render_criteria(details: dict) -> None:
+    """מציג את הקריטריונים עם סטטוס, צבע רקע והסבר."""
+    for crit_key, info in details.items():
+        status = info.get("status", "na")
+        icon = _MATCH_ICON.get(status, "")
+        label = _MATCH_LABEL.get(status, "?")
+        bg = _MATCH_BG.get(status, "#f8f9fa")
+        crit_name = _CRIT_LABEL.get(crit_key, crit_key)
+        detail_html = _format_criterion_detail(crit_key, info)
+
+        st.markdown(
+            f'<div dir="rtl" style="unicode-bidi:plaintext; background:{bg}; '
+            f'padding:0.4em 0.85em; border-radius:0.35em; margin-bottom:0.3em; '
+            f'font-size:0.92em; line-height:1.5;">'
+            f'<span style="font-weight:700;">{icon} {crit_name}:</span> '
+            f'<span style="opacity:0.85;">{label}</span>'
+            + (f' &nbsp;·&nbsp; <span style="opacity:0.9;">{detail_html}</span>' if detail_html else '')
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def _render_match_breakdown(match: dict) -> None:
+    """מציג פירוט התאמה למאסטר (compound → פר שכבה, אחרת → פר ציפוי)."""
+    layer_details = match.get("layer_details") or []
+    if layer_details:
+        # Compound match — הצג כל שכבה בנפרד
+        for ld in layer_details:
+            coat = ld.get("coating") or {}
+            layer_label = (coat.get("type_he") or coat.get("type")
+                           or ld.get("layer") or "").strip() or "שכבה"
+            st.markdown(
+                f'<div dir="rtl" style="unicode-bidi:plaintext; font-weight:700; '
+                f'color:#0d6efd; margin:0.5em 0 0.3em 0;">🧪 שכבה: {layer_label}</div>',
+                unsafe_allow_html=True,
+            )
+            _render_criteria(ld.get("details") or {})
+    else:
+        details = match.get("match_details") or {}
+        if details:
+            _render_criteria(details)
+        else:
+            st.caption("אין פירוט התאמה זמין (תוצאה מ-cache ישן — נסי לרוץ מחדש).")
+
 
 def _render_validation_warnings(result: dict) -> None:
     """מציג אזהרות ולידציה (RAL, מותג, ציפוי, אריזה, two-pass) אם קיימות."""
@@ -658,6 +782,11 @@ if st.session_state.result:
                 )
                 st.code(_mid, language=None)
 
+            # פירוט התאמה — נפתח מתפריט collapsible
+            if _m.get("match_details") or _m.get("layer_details"):
+                with st.expander(f"🔍 פירוט התאמה למאסטר {_mid}", expanded=False):
+                    _render_match_breakdown(_m)
+
 
     def _ov_chip(p):
         if not isinstance(p, dict):
@@ -951,6 +1080,12 @@ if st.session_state.result:
                         f'</div>',
                         unsafe_allow_html=True,
                     )
+                    if m.get("match_details") or m.get("layer_details"):
+                        with st.expander(
+                            f"🔍 פירוט התאמה למאסטר {m['master_id']}",
+                            expanded=False,
+                        ):
+                            _render_match_breakdown(m)
         st.divider()
 
     # ═══════════════════════════════════════════════════

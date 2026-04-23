@@ -8,6 +8,23 @@
 
 ## [Unreleased] — 23/04/2026
 
+### ✨ פירוט התאמה למאסטר (Match Breakdown)
+- **`build_match_details(coating, master, is_compound_layer=False)`** ב-
+  `core/master_matcher.py` — בונה פירוט מובנה של מה התאים ומה לא,
+  לכל קריטריון (4-5):
+  * **סוג ציפוי / תהליך** (status: full/partial/none/na)
+  * **מפרטים (תקנים)** — רשימת תקנים שהתאימו / רק בשרטוט / רק במאסטר
+  * **עובי** — השוואת טווחים + אחוז חפיפה (**רק אם יש עובי בשרטוט**)
+  * **RoHS** — מלא / חסר / לא רלוונטי
+  * **רמת זרחן** (רק ל-Electroless Nickel)
+- **`layer_details`** — עבור compound masters מוחזר פירוט נפרד לכל שכבה
+  (Silver, Electroless Nickel וכו'), כך שרואים איך כל שכבה התאימה למאסטר.
+- **UI חדש ב-`app.py`**: expander "🔍 פירוט התאמה" מתחת לכל כרטיס מאסטר
+  עם אייקונים צבעוניים (✅🟡❌⚪) לכל קריטריון.
+- **17 unit tests חדשים** ב-`tests/test_master_matcher.py` (TestClassifyType,
+  Standards, Thickness, Rohs, BuildMatchDetails).
+- **CACHE_VERSION v4 → v5** — תוצאות ישנות יחושבו מחדש עם פירוט.
+
 ### 🐛 Fix: Compound matching לא הופעל עם Silver OVER Nickel (23/04 late)
 - **סיבה:** ה-`name` של ציפוי הכסף הכיל את התיאור "OVER ELECTROLESS NICKEL",
   ו-`_detect_type` סרק את כל הטקסט — מצא "ELECTROLESS" ראשון וחזר

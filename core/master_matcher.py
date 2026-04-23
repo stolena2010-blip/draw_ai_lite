@@ -363,10 +363,210 @@ def find_top_masters(coating: dict, top_n: int = 3, min_score: float = 15.0) -> 
                 "full_name": row["full_name"].replace("\\\\", " | ").replace("\\", " | "),
                 "score": round(score, 1),
                 "breakdown": breakdown,
+                "match_details": build_match_details(coating, row),
             })
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored[:top_n]
+
+
+# ─── Match Details (פירוט התאמה להצגה ב-UI) ───
+STATUS_FULL = "full"        # ✅ התאמה מלאה
+STATUS_PARTIAL = "partial"  # 🟡 התאמה חלקית
+STATUS_NONE = "none"        # ❌ ללא התאמה
+STATUS_NA = "na"            # ⚪ לא רלוונטי / אין נתון
+
+
+def _classify_type_match(coat_type: str | None, master_type: str | None) -> dict:
+    """מסווג התאמת סוג ציפוי — Full/Partial/None/NA."""
+    if not coat_type:
+        return {"status": STATUS_NA, "reason": "לא זוהה סוג בשרטוט"}
+    if not master_type:
+        return {"status": STATUS_NA, "reason": "לא זוהה סוג במאסטר"}
+    if coat_type == master_type:
+        return {"status": STATUS_FULL, "coat": coat_type, "master": master_type}
+    # סוגים קרובים (ניקל ~ ניקל אלקטרולס, אנודייז ~ הארד אנודייז)
+    close_pairs = {
+        ("nickel", "electroless_nickel"), ("electroless_nickel", "nickel"),
+        ("anodize", "hard_anodize"), ("hard_anodize", "anodize"),
+    }
+    if (coat_type, master_type) in close_pairs:
+        return {"status": STATUS_PARTIAL, "coat": coat_type, "master": master_type}
+    return {"status": STATUS_NONE, "coat": coat_type, "master": master_type}
+
+
+def _classify_layer_type_in_master(coat_type: str | None, master_text: str) -> dict:
+    """
+    לשכבה בודדת בתוך compound master — בודק אם המאסטר *מכיל* את סוג הציפוי
+    (לא זהות מדויקת). לדוגמה: Silver-layer של ms.1101 "Silver over Electroless
+    Nickel" → המאסטר מכיל SILVER → התאמה מלאה.
+    """
+    if not coat_type:
+        return {"status": STATUS_NA, "reason": "לא זוהה סוג בשרטוט"}
+    norm = _norm(master_text)
+    for kw in _TYPE_KEYWORDS.get(coat_type, []):
+        if kw.upper() in norm:
+            return {
+                "status": STATUS_FULL,
+                "coat": coat_type,
+                "note": "המאסטר מכיל את הסוג",
+            }
+    return {
+        "status": STATUS_NONE,
+        "coat": coat_type,
+        "note": "המאסטר לא מכיל את הסוג",
+    }
+
+
+def _classify_standards_match(coat_codes: set[str], master_codes: set[str]) -> dict:
+    """מסווג התאמת תקנים."""
+    if not coat_codes and not master_codes:
+        return {"status": STATUS_NA, "reason": "אין תקנים בשניהם",
+                "matched": [], "only_in_master": [], "only_in_coat": []}
+    if not coat_codes:
+        return {"status": STATUS_NA, "reason": "אין תקנים בשרטוט",
+                "matched": [], "only_in_master": sorted(master_codes), "only_in_coat": []}
+    if not master_codes:
+        return {"status": STATUS_NONE, "reason": "אין תקנים במאסטר",
+                "matched": [], "only_in_master": [], "only_in_coat": sorted(coat_codes)}
+
+    matched = coat_codes & master_codes
+    only_coat = coat_codes - master_codes
+    only_master = master_codes - coat_codes
+
+    # מלא = כל תקני השרטוט נמצאו במאסטר, ואין "עודפים" רבים במאסטר
+    if matched == coat_codes and len(only_master) <= 1:
+        status = STATUS_FULL
+    elif matched:
+        status = STATUS_PARTIAL
+    else:
+        status = STATUS_NONE
+    return {
+        "status": status,
+        "matched": sorted(matched),
+        "only_in_coat": sorted(only_coat),
+        "only_in_master": sorted(only_master),
+    }
+
+
+def _classify_thickness_match(coat_range: tuple | None,
+                               master_range: tuple | None) -> dict:
+    """מסווג התאמת עובי — רק אם יש עובי בשרטוט."""
+    if not coat_range:
+        return {"status": STATUS_NA, "reason": "אין עובי בשרטוט"}
+    if not master_range:
+        return {"status": STATUS_NA, "reason": "אין עובי במאסטר",
+                "coat_range": coat_range}
+    overlap = _ranges_overlap(coat_range, master_range)
+    if overlap >= 0.7:
+        status = STATUS_FULL
+    elif overlap > 0:
+        status = STATUS_PARTIAL
+    else:
+        status = STATUS_NONE
+    return {
+        "status": status,
+        "coat_range": coat_range,
+        "master_range": master_range,
+        "overlap_pct": round(overlap * 100),
+    }
+
+
+def _classify_rohs(coat_rohs: bool, master_rohs: bool) -> dict:
+    """מסווג התאמת RoHS — רק אם השרטוט דורש RoHS."""
+    if not coat_rohs:
+        return {"status": STATUS_NA, "reason": "RoHS לא דרוש בשרטוט"}
+    if master_rohs:
+        return {"status": STATUS_FULL, "note": "המאסטר תומך ב-RoHS"}
+    return {"status": STATUS_NONE, "note": "השרטוט דורש RoHS, המאסטר לא"}
+
+
+def _classify_phosphorus(coat_phos: str | None, master_phos: str | None) -> dict:
+    """מסווג התאמת רמת זרחן ב-Electroless Nickel."""
+    if not coat_phos:
+        return {"status": STATUS_NA, "reason": "אין רמת זרחן בשרטוט"}
+    if not master_phos:
+        return {"status": STATUS_PARTIAL, "reason": "אין רמת זרחן במאסטר",
+                "coat_phos": coat_phos}
+    if coat_phos == master_phos:
+        return {"status": STATUS_FULL, "coat_phos": coat_phos, "master_phos": master_phos}
+    return {"status": STATUS_NONE, "coat_phos": coat_phos, "master_phos": master_phos}
+
+
+def build_match_details(coating: dict, master, *, is_compound_layer: bool = False) -> dict:
+    """
+    בונה פירוט התאמה מוצלבת בין ציפוי למאסטר.
+
+    Args:
+        coating: dict של ציפוי השרטוט
+        master: pandas.Series או dict (מ-cache)
+        is_compound_layer: True אם זה שכבה בתוך compound master
+            → בדיקת סוג תיעשה ע"י "האם המאסטר מכיל את הסוג" במקום זהות מדויקת.
+
+    מחזיר dict עם 4-5 קריטריונים, לכל אחד:
+      - status: "full" / "partial" / "none" / "na"
+      - פרטים נוספים (ערכים שהושוו, מה התגלה)
+
+    מיועד להצגה ב-UI — כל קריטריון מוצג עם אייקון וצבע לפי status.
+    """
+    # נרמל master ל-dict כך שנעבוד על שניהם באותה דרך
+    if isinstance(master, dict):
+        m_dict = master
+    else:
+        # pandas.Series
+        m_dict = {
+            "desc": str(master.get("desc", "") or ""),
+            "standard": str(master.get("standard", "") or ""),
+            "thickness": str(master.get("thickness", "") or ""),
+            "full_name": str(master.get("full_name", "") or ""),
+        }
+
+    coat_text = _coating_text(coating)
+    master_text = f"{m_dict.get('desc', '')} {m_dict.get('standard', '')} {m_dict.get('full_name', '')}"
+
+    # 1. סוג ציפוי
+    coat_type = _detect_primary_type(coating)
+    if is_compound_layer:
+        # בתוך compound — בדוק אם המאסטר מכיל את הסוג הזה
+        type_match = _classify_layer_type_in_master(coat_type, master_text)
+    else:
+        master_type = _detect_type(master_text)
+        type_match = _classify_type_match(coat_type, master_type)
+
+    # 2. תקנים
+    coat_codes = _extract_std_codes(coat_text)
+    master_codes = _extract_std_codes(master_text)
+
+    # 3. עובי (רק אם יש בשרטוט)
+    coat_thick = (
+        _extract_thickness_range(coating.get("thickness", "") or "")
+        or _extract_thickness_range(coat_text)
+    )
+    master_thick = (
+        _extract_thickness_range(m_dict.get("thickness", ""))
+        or _extract_thickness_range(m_dict.get("standard", ""))
+    )
+
+    # 4. RoHS
+    coat_rohs = bool(coating.get("rohs"))
+    master_rohs = "ROHS" in _norm(master_text)
+
+    # 5. רמת זרחן (רק ל-electroless nickel)
+    coat_phos = _detect_phosphorus_level(coat_text)
+    master_phos = _detect_phosphorus_level(master_text)
+
+    details = {
+        "coating_type": type_match,
+        "standards": _classify_standards_match(coat_codes, master_codes),
+        "thickness": _classify_thickness_match(coat_thick, master_thick),
+        "rohs": _classify_rohs(coat_rohs, master_rohs),
+    }
+
+    # זרחן — רק אם רלוונטי (ציפוי מכיל electroless nickel)
+    if coat_type == "electroless_nickel" or coat_phos:
+        details["phosphorus"] = _classify_phosphorus(coat_phos, master_phos)
+
+    return details
 
 
 # ─── Compound matching (Silver over Nickel וכו') ───
@@ -522,6 +722,17 @@ def find_compound_masters(coatings: list[dict], top_n: int = 3,
     for _, row in df.iterrows():
         score, breakdown = _score_compound_master(coatings, row, required_types, coat_codes)
         if score >= min_score:
+            # פירוט התאמה לכל שכבה בנפרד (Silver, Electroless Nickel וכו')
+            layer_details = []
+            for c in coatings:
+                if not isinstance(c, dict):
+                    continue
+                layer_type = _detect_primary_type(c)
+                layer_details.append({
+                    "layer": layer_type or "unknown",
+                    "coating": c,
+                    "details": build_match_details(c, row, is_compound_layer=True),
+                })
             scored.append({
                 "master_id": row["master_id"],
                 "desc": row["desc"],
@@ -531,6 +742,7 @@ def find_compound_masters(coatings: list[dict], top_n: int = 3,
                 "score": round(score, 1),
                 "breakdown": breakdown,
                 "covers_types": sorted(required_types),
+                "layer_details": layer_details,
             })
 
     scored.sort(key=lambda x: x["score"], reverse=True)

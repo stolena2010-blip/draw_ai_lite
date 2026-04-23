@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 # v2: החזרת OCR-always-on ב-Stage 1 (תיקון regression: material wrong)
 # v3: Compound master matching (Silver over Nickel וכו') — מחייב הרצה מחדש
 # v4: תיקון _detect_primary_type — משתמש ב-type/type_he בלבד (Silver OVER Nickel)
-CACHE_VERSION = "v4"
+# v5: הוספת match_details + layer_details בתוצאות master matching
+CACHE_VERSION = "v5"
 
 _CACHE_DIR = Path("output/.cache")
 
