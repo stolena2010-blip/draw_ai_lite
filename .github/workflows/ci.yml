@@ -49,7 +49,6 @@ jobs:
           import core.drawing_cache
           import core.azure_client
           import core.extractor
-          import core.assembly
           import core.ocr_fallback
           import core.pdf_utils
           import core.two_pass
@@ -57,7 +56,7 @@ jobs:
           import core.cost_tracker
           import core.master_matcher
           import core.prompts
-          import core.assembly_prompts
+          import ui_single_view
           from storage import save_handler, pdf_report
           print('All modules import cleanly')
           "

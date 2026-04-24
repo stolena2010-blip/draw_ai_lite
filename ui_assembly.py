@@ -1,8 +1,12 @@
 """
-UI של מצב 'מכלולים מרובים'.
+UI של מוד "מכלולים מרובים".
 
-מודול נפרד מ-app.py כדי שהקוד של המצב הקיים (שרטוט בודד) לא ישתנה.
-מופעל מ-app.py באמצעות render_assembly_mode() כשהמשתמש בוחר במצב הזה.
+מנתח מספר שרטוטי PDF בלולאה — כל אחד עובר את אותו pipeline מלא כמו
+במוד "שרטוט בודד" (Stage 1 → Stage 2 → Stage 3 → התאמה למאסטר).
+אין קשר בין השרטוטים, אין עץ מוצר ואין ניתוח קשרים.
+
+התצוגה לכל שרטוט זהה לחלוטין לזו שבמוד הבודד (ui_single_view), עם דפדוף
+בין השרטוטים. בסוף הדף — הורדת דוחות מאוחדים (JSON / Excel / PDF).
 """
 from __future__ import annotations
 
@@ -12,32 +16,26 @@ from pathlib import Path
 
 import streamlit as st
 
-from core.assembly import (
-    extract_assembly_drawing,
-    extract_assembly_overview_image,
-    analyze_relationships,
-)
-from storage.save_handler import save_to_json
-from storage.pdf_report import (
-    build_assembly_pdf,
-    build_tree_pdf,
-    build_tree_excel,
-    build_assembly_excel,
-)
+from core.extractor import extract_drawing
 from core.exceptions import format_error_for_ui, get_streamlit_level
+from storage.save_handler import save_to_json, save_batch_to_excel
+from storage.pdf_report import build_batch_pdf
+from ui_single_view import (
+    render_drawing_result,
+    render_validation_warnings,
+    render_stage_model_feedback,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def _show_error(exc: Exception, *, prefix: str = "") -> None:
-    """Displays error via Streamlit with user-friendly message and severity."""
+    """מציג שגיאה ידידותית למשתמש."""
     level = get_streamlit_level(exc)
     msg = format_error_for_ui(exc, include_technical=True)
     if prefix:
         msg = f"**{prefix}**\n\n{msg}"
     getattr(st, level)(msg)
-
-_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def _init_state():
@@ -45,20 +43,18 @@ def _init_state():
         st.session_state["asm_results"] = []  # list[dict]
     if "asm_index" not in st.session_state:
         st.session_state["asm_index"] = 0
-    if "asm_relationships" not in st.session_state:
-        st.session_state["asm_relationships"] = None
 
 
-def _process_pdf(uploaded_file, output_dir: Path) -> dict | None:
-    """מנתב כל קובץ שהועלה — PDF לחילוץ רגיל, תמונה לניתוח תרשים-מכלול."""
-    suffix = Path(uploaded_file.name).suffix.lower()
+def _process_pdf(uploaded_file, output_dir: Path, ocr_enabled: bool) -> dict | None:
+    """מנתח קובץ PDF יחיד באמצעות ה-pipeline של מוד שרטוט בודד."""
     temp_path = output_dir / f"_asm_temp_{uploaded_file.name}"
     with open(temp_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
     try:
-        if suffix in _IMAGE_SUFFIXES:
-            return extract_assembly_overview_image(temp_path)
-        return extract_assembly_drawing(temp_path)
+        result = extract_drawing(temp_path, use_ocr_fallback=ocr_enabled)
+        # שומר את שם הקובץ המקורי (extract_drawing משתמש בשם הקובץ הזמני)
+        result["source_filename"] = uploaded_file.name
+        return result
     except Exception as exc:
         logger.exception("Assembly extract failed for %s", uploaded_file.name)
         _show_error(exc, prefix=f"שגיאה ב-{uploaded_file.name}")
@@ -68,215 +64,11 @@ def _process_pdf(uploaded_file, output_dir: Path) -> dict | None:
             temp_path.unlink()
 
 
-def _render_drawing_card(d: dict):
-    """תצוגה מלאה של שרטוט בודד במצב מכלולים."""
-    pn = d.get("part_number") or "—"
-    dn = d.get("drawing_number") or "—"
-    rev = d.get("revision") or "—"
-    cust = d.get("customer") or "—"
-    mat = d.get("material") or "—"
-    qty = d.get("quantity") or "—"
-    role = d.get("assembly_role") or "—"
-
-    st.markdown(
-        f'<div dir="rtl" style="unicode-bidi:plaintext; text-align:right; '
-        f'background:linear-gradient(135deg,#eef5ff 0%,#e8f5e9 100%); '
-        f'border:2px solid #0d6efd; border-radius:0.7em; padding:1em 1.2em; '
-        f'margin-bottom:1em; font-size:0.95em; line-height:1.7;">'
-        f'<div style="font-size:1.1em; font-weight:700; color:#0d6efd; '
-        f'margin-bottom:0.5em; border-bottom:1px solid #cfe2ff; padding-bottom:0.3em;">'
-        f'🎯 פרטי השרטוט</div>'
-        f'<div><span style="color:#6c757d;">פריט:</span> <b>{pn}</b> &nbsp;·&nbsp; '
-        f'<span style="color:#6c757d;">שרטוט:</span> <b>{dn}</b> &nbsp;·&nbsp; '
-        f'<span style="color:#6c757d;">גרסה:</span> <b>{rev}</b> &nbsp;·&nbsp; '
-        f'<span style="color:#6c757d;">לקוח:</span> <b>{cust}</b></div>'
-        f'<div style="margin-top:0.4em;"><span style="color:#6c757d;">חומר:</span> <b>{mat}</b> '
-        f'&nbsp;·&nbsp; <span style="color:#6c757d;">תפקיד:</span> <b>{role}</b> '
-        f'&nbsp;·&nbsp; <span style="color:#6c757d;">כמות:</span> <b>{qty}</b></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # ─── BOM (אם קיים) ───
-    bom = d.get("bom_items") or []
-    if bom:
-        st.markdown("#### 📋 טבלת חלקים (BOM)")
-        rows = []
-        for it in bom:
-            if isinstance(it, dict):
-                rows.append({
-                    "Item": it.get("item_no", ""),
-                    "Part Number": it.get("part_number", ""),
-                    "Description": it.get("description", ""),
-                    "Qty": it.get("qty", ""),
-                })
-        if rows:
-            st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    # ─── Helper להצגת שלב כללי ───
-    def _render_step_block(title_he: str, icon: str, items: list,
-                            keys=("step_no", "name_en", "name_he", "details")):
-        if not items:
-            return
-        st.markdown(f"#### {icon} {title_he}")
-        rows = []
-        for it in items:
-            if not isinstance(it, dict):
-                rows.append({"שלב": "", "אנגלית": str(it), "עברית": "", "פרטים": ""})
-                continue
-            rows.append({
-                "שלב": it.get(keys[0], ""),
-                "אנגלית": it.get(keys[1], ""),
-                "עברית": it.get(keys[2], ""),
-                "פרטים": it.get(keys[3], ""),
-            })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    # ─── תהליכים בסדר העבודה ───
-    _render_step_block("עיבוד שבבי", "🔧", d.get("machining_processes") or [])
-
-    coatings = d.get("coating_processes") or []
-    if coatings:
-        st.markdown("#### 🎨 ציפויים / טיפול שטח")
-        rows = []
-        for c in coatings:
-            if isinstance(c, dict):
-                rows.append({
-                    "שלב": c.get("step_no", ""),
-                    "סוג (HE)": c.get("type_he", ""),
-                    "סוג (EN)": c.get("type", ""),
-                    "תיאור": c.get("name", ""),
-                    "תקן": c.get("standard", ""),
-                    "עובי": c.get("thickness", ""),
-                    "RoHS": "✓" if c.get("rohs") else "",
-                })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    paintings = d.get("painting_processes") or []
-    if paintings:
-        st.markdown("#### 🖌️ צביעות")
-        rows = []
-        for p in paintings:
-            if isinstance(p, dict):
-                rows.append({
-                    "שלב": p.get("step_no", ""),
-                    "סוג (HE)": p.get("type_he", ""),
-                    "סוג (EN)": p.get("type", ""),
-                    "תיאור": p.get("name", ""),
-                    "תקן": p.get("standard", ""),
-                    "עובי": p.get("thickness", ""),
-                    "RoHS": "✓" if p.get("rohs") else "",
-                })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    _render_step_block("בדיקות", "🔍", d.get("inspection_processes") or [])
-    _render_step_block("אישור סופי", "✅", d.get("final_approval") or [])
-
-    add = d.get("additional_processes") or []
-    if add:
-        st.markdown("#### 🛠️ תהליכים מלווים")
-        rows = []
-        for a in add:
-            if isinstance(a, dict):
-                rows.append({"אנגלית": a.get("name_en", ""), "עברית": a.get("name_he", "")})
-        if rows:
-            st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    # ─── תקנים ───
-    stds = d.get("standards") or []
-    if stds:
-        st.markdown("#### 📜 כל התקנים שמופיעים בשרטוט")
-        st.markdown(" &nbsp;·&nbsp; ".join(f"`{s}`" for s in stds))
-
-    # ─── אריזה ───
-    pkg = d.get("packaging_notes") or {}
-    if isinstance(pkg, dict) and (pkg.get("he") or pkg.get("en")):
-        st.markdown("#### 📦 אריזה")
-        if pkg.get("he"):
-            st.markdown(
-                f'<div dir="rtl" style="unicode-bidi:plaintext; background:#fff3cd; '
-                f'color:#664d03; padding:0.6em 0.9em; border-radius:0.4em; margin-bottom:0.4em;">'
-                f'🇮🇱 {pkg["he"]}</div>',
-                unsafe_allow_html=True,
-            )
-        if pkg.get("en"):
-            st.markdown(
-                f'<div dir="ltr" style="background:#fff3cd; color:#664d03; '
-                f'padding:0.6em 0.9em; border-radius:0.4em;">🇬🇧 {pkg["en"]}</div>',
-                unsafe_allow_html=True,
-            )
-
-    # ─── הערות ───
-    notes = (d.get("notes") or "").strip()
-    if notes:
-        with st.expander("📝 הערות השרטוט (NOTES)", expanded=False):
-            st.info(notes)
-
-    with st.expander("📄 JSON מלא"):
-        st.json({k: v for k, v in d.items() if not k.startswith("_")})
-
-
-_SEVERITY_ICON = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🟢"}
-
-
-def _render_validation_warnings(result: dict) -> None:
-    """מציג אזהרות ולידציה אם קיימות."""
-    warnings = result.get("_validation_warnings") or []
-    if not warnings:
-        return
-    critical = [w for w in warnings if w.get("severity") == "CRITICAL"]
-    label = f"⚠️ {len(warnings)} אזהרות ולידציה"
-    if critical:
-        label += f" — {len(critical)} 🔴 קריטיות"
-    with st.expander(label, expanded=bool(critical)):
-        for w in warnings:
-            icon = _SEVERITY_ICON.get(w.get("severity", ""), "⚪")
-            st.markdown(
-                f"{icon} **{w.get('type', '')}** | מקור: `{w.get('source', '')}` | "
-                f"ערך: `{w.get('value', '')[:80]}`  \n"
-                f"_{w.get('message', '')}_"
-            )
-
-
-def _render_stage_model_feedback(cost_info: dict,
-                                 title: str = "🤖 מודל בפועל לכל שלב",
-                                 expanded: bool = False):
-    """מציג פירוט שלבים עם מודל, טוקנים ועלות."""
-    stages = (cost_info or {}).get("stages") or []
-    if not stages:
-        return
-
-    rows = []
-    for s in stages:
-        if not isinstance(s, dict):
-            continue
-        rows.append({
-            "שלב": s.get("stage", ""),
-            "מודל בפועל": s.get("model", ""),
-            "Input": s.get("input_tokens", 0),
-            "Output": s.get("output_tokens", 0),
-            "עלות $": s.get("total_cost_usd", 0),
-        })
-
-    if not rows:
-        return
-
-    with st.expander(title, expanded=expanded):
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-        models = sorted({r["מודל בפועל"] for r in rows if r["מודל בפועל"]})
-        if models:
-            st.caption("מודלים בשימוש: " + " | ".join(models))
-
-
 def _render_export_pair(*, button_label: str, spinner_text: str,
                         build_fn, out_path: Path, state_key: str,
                         mime: str, btn_key: str, dl_key: str,
                         err_label: str):
-    """מציג צמד "צור קובץ → הורד" בתוך טאב יחיד.
-
-    מחזיק את נתיב הקובץ ב-`st.session_state[state_key]`, כך שכפתור
-    ההורדה נשאר זמין גם אחרי rerun ללא ייצור מחדש.
-    """
+    """מציג "צור קובץ → הורד" עם state בין reruns של Streamlit."""
     if st.button(button_label, use_container_width=True,
                  type="primary", key=btn_key):
         try:
@@ -301,92 +93,22 @@ def _render_export_pair(*, button_label: str, spinner_text: str,
             )
 
 
-def _render_relationships(rel: dict):
-    """תצוגת ניתוח קשרי אבא/בן בין השרטוטים."""
-    st.markdown("## 🔗 ניתוח קשרי המכלול")
-
-    summary = (rel.get("summary_he") or "").strip()
-    if summary:
-        st.markdown(
-            f'<div dir="rtl" style="unicode-bidi:plaintext; background:#d4edda; '
-            f'color:#155724; padding:0.7em 1em; border-radius:0.5em; '
-            f'margin:0.5em 0 1em 0; line-height:1.7;">📋 <b>סיכום:</b><br>{summary}</div>',
-            unsafe_allow_html=True,
-        )
-
-    asms = rel.get("assemblies") or []
-    if asms:
-        st.markdown("### 🧩 מכלולים שזוהו")
-        for a in asms:
-            ppn = a.get("parent_part_number") or "—"
-            pdn = a.get("parent_drawing_number") or "—"
-            kids = a.get("children") or []
-            with st.expander(f"📦 מכלול: P/N={ppn}  ·  DWG={pdn}  ·  {len(kids)} חלקים",
-                             expanded=True):
-                if kids:
-                    rows = []
-                    for k in kids:
-                        if isinstance(k, dict):
-                            rows.append({
-                                "P/N": k.get("part_number", ""),
-                                "Drawing": k.get("drawing_number", ""),
-                                "Description": k.get("description", ""),
-                                "Qty": k.get("qty", ""),
-                                "הועלה?": "✓" if k.get("found_in_uploaded_files") else "✗",
-                            })
-                    st.dataframe(rows, use_container_width=True, hide_index=True)
-                else:
-                    st.caption("אין חלקים")
-
-    orphans = rel.get("orphans") or []
-    if orphans:
-        st.markdown("### 🪙 שרטוטים ללא הורה")
-        rows = []
-        for o in orphans:
-            if isinstance(o, dict):
-                rows.append({
-                    "P/N": o.get("part_number", ""),
-                    "Drawing": o.get("drawing_number", ""),
-                    "סיבה": o.get("reason_he", ""),
-                })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    missing = rel.get("missing_children") or []
-    if missing:
-        st.markdown("### ⚠️ חלקים שמופיעים ב-BOM אך לא הועלו כשרטוט")
-        rows = []
-        for m in missing:
-            if isinstance(m, dict):
-                rows.append({
-                    "P/N": m.get("part_number", ""),
-                    "Description": m.get("description", ""),
-                    "Qty": m.get("qty", ""),
-                    "נדרש ע\"י": m.get("needed_by_he", ""),
-                })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    warnings = rel.get("warnings_he") or []
-    if warnings:
-        st.markdown("### 💡 הערות / אזהרות")
-        for w in warnings:
-            st.warning(w)
-
-
 # ═══════════════════════════════════════════════════════════════
 # נקודת כניסה
 # ═══════════════════════════════════════════════════════════════
 def render_assembly_mode(output_dir: Path):
-    """מצייר את כל מסך מצב המכלולים."""
+    """מצייר את כל מסך מוד המכלולים."""
     _init_state()
 
-    st.caption("🧩 **מצב מכלולים** — העלה מספר שרטוטים יחד · "
-               "נתח כל אחד בנפרד · קבל ניתוח קשרי אבא/בן בסוף")
+    st.caption("🧩 **מצב מכלולים** — העלה מספר שרטוטי PDF · "
+               "כל שרטוט ינותח בנפרד (כמו במוד בודד) · "
+               "בסוף — הורדת דוחות מאוחדים")
 
     # ─── 1. העלאת קבצים ───
-    st.markdown("### 1️⃣ העלה שרטוטים PDF (ואופציונלית תרשים מכלול PNG/JPG)")
+    st.markdown("### 1️⃣ העלה שרטוטי PDF")
     files = st.file_uploader(
-        "גרור שרטוטי PDF + תמונה אחת של תרשים-מכלול (Exploded View) — או לחץ לבחירה",
-        type=["pdf", "png", "jpg", "jpeg", "webp"],
+        "גרור שרטוטי PDF או לחץ לבחירה",
+        type=["pdf"],
         accept_multiple_files=True,
         key="asm_uploader",
     )
@@ -403,7 +125,9 @@ def render_assembly_mode(output_dir: Path):
         if st.button("🗑️ נקה", use_container_width=True):
             st.session_state["asm_results"] = []
             st.session_state["asm_index"] = 0
-            st.session_state["asm_relationships"] = None
+            # איפוס state של הורדות
+            for key in ("asm_pdf_path", "asm_xlsx_path", "asm_json_path"):
+                st.session_state.pop(key, None)
             st.rerun()
 
     # ─── 2. ניתוח ───
@@ -415,24 +139,23 @@ def render_assembly_mode(output_dir: Path):
                 (i - 1) / len(files),
                 text=f"🔄 מנתח {i}/{len(files)}: {f.name}",
             )
-            res = _process_pdf(f, output_dir)
+            res = _process_pdf(f, output_dir, ocr_enabled=True)
             if res is not None:
                 results.append(res)
         progress.progress(1.0, text="✅ ניתוח הסתיים")
-        # תמונת מכלול (Overview Image) תמיד ראשונה — היא מייצגת את כל
-        # השרטוטים יחד, לא משנה באיזה סדר הועלתה.
-        results.sort(key=lambda r: 0 if r.get("_is_overview_image") else 1)
         st.session_state["asm_results"] = results
         st.session_state["asm_index"] = 0
-        st.session_state["asm_relationships"] = None  # נדרש מחדש
+        # איפוס state של קבצים שנוצרו בסשן קודם
+        for key in ("asm_pdf_path", "asm_xlsx_path", "asm_json_path"):
+            st.session_state.pop(key, None)
         st.success(f"✅ נותחו {len(results)} שרטוטים")
 
     results = st.session_state["asm_results"]
     if not results:
-        st.info("📥 העלה שרטוטים ולחץ 'נתח' כדי להתחיל.")
+        st.info("📥 העלה שרטוטי PDF ולחץ 'נתח' כדי להתחיל.")
         return
 
-    # ─── 3. ניווט בין שרטוטים ───
+    # ─── 3. דפדוף בין שרטוטים ───
     st.divider()
     st.markdown("### 2️⃣ דפדוף בין שרטוטים")
 
@@ -440,15 +163,12 @@ def render_assembly_mode(output_dir: Path):
     idx = max(0, min(st.session_state["asm_index"], n - 1))
 
     def _goto(new_idx: int):
-        """מעדכן את האינדקס. אסור לגעת ב-asm_jump כאן —
-        ה-selectbox כבר נוצר באותה הרצה, וסנכרון מתבצע בראש ההרצה הבאה."""
         new_idx = max(0, min(new_idx, n - 1))
         st.session_state["asm_index"] = new_idx
 
     def _on_jump_change():
         st.session_state["asm_index"] = st.session_state["asm_jump"]
 
-    # ודא שערך ה-selectbox מסונכרן עם asm_index לפני יצירת ה-widget
     if st.session_state.get("asm_jump") != idx:
         st.session_state["asm_jump"] = idx
 
@@ -485,139 +205,74 @@ def render_assembly_mode(output_dir: Path):
     st.caption(f"📄 מציג שרטוט **{idx + 1}** מתוך **{n}** · "
                f"`{results[idx].get('source_filename', '')}`")
 
-    # ─── 4. תצוגה מלאה של השרטוט הנבחר ───
-    _render_drawing_card(results[idx])
-    _render_validation_warnings(results[idx])
-    _render_stage_model_feedback(
-        (results[idx].get("_cost_info") or {}),
+    # ─── 4. תצוגת השרטוט הנבחר (זהה למוד בודד) ───
+    current = results[idx]
+    if current.get("_ocr_used"):
+        st.info("🔍 OCR הופעל כגיבוי לניתוח שרטוט זה")
+
+    render_drawing_result(current, key_prefix=f"asm_{idx}", with_toggle=True)
+    render_validation_warnings(current)
+    render_stage_model_feedback(
+        current.get("_cost_info") or {},
         title="🤖 מודל בפועל בשלבי ניתוח השרטוט הזה",
         expanded=False,
     )
 
-    # ─── 5. ניתוח קשרים ───
+    # ─── 5. הורדת דוחות מאוחדים ───
     st.divider()
-    st.markdown("### 3️⃣ ניתוח קשרי המכלול")
+    st.markdown("### 3️⃣ הורדת דוחות מאוחדים")
+    st.caption("דוחות שמקבצים את כל השרטוטים שנותחו בסשן זה.")
 
-    rel = st.session_state["asm_relationships"]
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # שורת פעולה עליונה — רק ניתוח ושמירת JSON גולמי
-    col_r1, col_r2 = st.columns([3, 1])
-    with col_r1:
-        if st.button("🔗 נתח קשרי אבא/בן בין כל השרטוטים",
-                     type="primary", use_container_width=True):
-            with st.spinner("🔄 שולח את כל השרטוטים לניתוח..."):
-                try:
-                    rel = analyze_relationships(results)
-                    st.session_state["asm_relationships"] = rel
-                except Exception as exc:
-                    logger.exception("Relationships analysis failed")
-                    _show_error(exc, prefix="שגיאה בניתוח קשרים")
-                    rel = None
-    with col_r2:
-        if rel and st.button("💾 שמור JSON גולמי",
-                             use_container_width=True,
-                             help="מבנה הנתונים המלא של כל השרטוטים + הקשרים"):
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            payload = {"drawings": results, "relationships": rel}
-            path = save_to_json(payload, output_dir / f"_assembly_{ts}.json")
-            st.success(f"נשמר: `{path.name}`")
+    tab_json, tab_xlsx, tab_pdf = st.tabs([
+        "💾 JSON",
+        "📊 Excel",
+        "📕 PDF",
+    ])
 
-    # ─── 6. הורדת קבצים — מאורגן ב-expander עם טאבים ───
-    if rel is None:
-        st.info("💡 לאחר ניתוח הקשרים, תוכל להוריד דוחות PDF ו-Excel "
-                "מסעיף 'הורדת קבצים' שיופיע כאן.")
-
-    with st.expander("📦 הורדת קבצים (PDF / Excel)",
-                     expanded=bool(rel)):
-        if rel is None:
-            st.caption("ℹ️ ניתן להפיק קבצים גם ללא ניתוח קשרים, "
-                       "אבל הם יוצגו כרשימה שטוחה במקום עץ מובנה.")
-
-        tab_pdf_full, tab_pdf_tree, tab_xlsx_full, tab_xlsx_tree = st.tabs([
-            "📕 PDF מלא",
-            "🌳 PDF עץ מקוצר",
-            "📊 Excel מלא",
-            "📊 Excel עץ מקוצר",
-        ])
-
-        # ── טאב 1: דוח PDF מלא ──
-        with tab_pdf_full:
-            st.caption("דוח PDF מקיף לכל שרטוט: כותרת, חומר, תהליכים, "
-                       "תקנים, NOTES, ובסוף ניתוח הקשרים בין השרטוטים.")
-            _render_export_pair(
-                button_label="📕 צור דוח PDF מלא",
-                spinner_text="📄 מייצר דוח PDF...",
-                build_fn=lambda p: build_assembly_pdf(results, rel, p),
-                out_path=output_dir / f"_assembly_report_"
-                                      f"{datetime.now():%Y%m%d_%H%M%S}.pdf",
-                state_key="asm_pdf_path",
-                mime="application/pdf",
-                btn_key="btn_pdf_full",
-                dl_key="dl_pdf_full",
-                err_label="PDF",
-            )
-
-        # ── טאב 2: דוח PDF עץ מקוצר ──
-        with tab_pdf_tree:
-            st.caption("דוח PDF קצר: טבלת עץ מוצר + סכמה גרפית של "
-                       "המבנה ההיררכי. ללא פירוט תהליכים לכל שרטוט.")
-            _render_export_pair(
-                button_label="🌳 צור דוח עץ מוצר (PDF)",
-                spinner_text="📄 מייצר דוח עץ...",
-                build_fn=lambda p: build_tree_pdf(results, rel, p),
-                out_path=output_dir / f"_assembly_tree_"
-                                      f"{datetime.now():%Y%m%d_%H%M%S}.pdf",
-                state_key="asm_tree_pdf_path",
-                mime="application/pdf",
-                btn_key="btn_pdf_tree",
-                dl_key="dl_pdf_tree",
-                err_label="PDF עץ",
-            )
-
-        # ── טאב 3: Excel מלא ──
-        with tab_xlsx_full:
-            st.caption("Excel רב-גיליונות (12 sheets): כל הנתונים — "
-                       "סקירה, BOM, חומרים, תהליכים, תקנים, ועוד, "
-                       "כולל גיליון 'עץ מתמונה' עם קישור לשרטוטים. "
-                       "מתאים לניתוח מעמיק.")
-            _render_export_pair(
-                button_label="📊 צור Excel מלא (11 גיליונות)",
-                spinner_text="📄 מייצר Excel מקיף...",
-                build_fn=lambda p: build_assembly_excel(results, rel, p),
-                out_path=output_dir / f"_assembly_full_"
-                                      f"{datetime.now():%Y%m%d_%H%M%S}.xlsx",
-                state_key="asm_full_xlsx_path",
-                mime="application/vnd.openxmlformats-officedocument."
-                     "spreadsheetml.sheet",
-                btn_key="btn_xlsx_full",
-                dl_key="dl_xlsx_full",
-                err_label="Excel מלא",
-            )
-
-        # ── טאב 4: Excel עץ מקוצר ──
-        with tab_xlsx_tree:
-            st.caption("Excel עם עץ המוצר האמיתי בגיליון Tree, "
-                       "ובנפרד גיליון OverviewImage לעץ מהתמונה + "
-                       "קישור בפועל ל-P/N/Drawing/חומר מה-BOM. "
-                       "פורמט נוח לייבוא ל-ERP.")
-            _render_export_pair(
-                button_label="📊 צור עץ מוצר ל-Excel",
-                spinner_text="📄 מייצר Excel של עץ המוצר...",
-                build_fn=lambda p: build_tree_excel(results, rel, p),
-                out_path=output_dir / f"_assembly_tree_"
-                                      f"{datetime.now():%Y%m%d_%H%M%S}.xlsx",
-                state_key="asm_tree_xlsx_path",
-                mime="application/vnd.openxmlformats-officedocument."
-                     "spreadsheetml.sheet",
-                btn_key="btn_xlsx_tree",
-                dl_key="dl_xlsx_tree",
-                err_label="Excel עץ",
-            )
-
-    if rel:
-        _render_stage_model_feedback(
-            (rel.get("_cost_info") or {}),
-            title="🤖 מודל בפועל בשלב ניתוח הקשרים",
-            expanded=False,
+    with tab_json:
+        st.caption("קובץ JSON יחיד שמכיל את כל התוצאות של השרטוטים שנותחו.")
+        _render_export_pair(
+            button_label="💾 צור JSON מאוחד",
+            spinner_text="💾 שומר JSON...",
+            build_fn=lambda p: save_to_json({"drawings": results}, p),
+            out_path=output_dir / f"_assembly_{ts}.json",
+            state_key="asm_json_path",
+            mime="application/json",
+            btn_key="btn_json",
+            dl_key="dl_json",
+            err_label="JSON",
         )
-        _render_relationships(rel)
+
+    with tab_xlsx:
+        st.caption("קובץ Excel מאוחד עם גיליון מרכזי לכל שרטוט + "
+                   "גיליונות מצטברים (ציפויים, מאסטרים, תקנים, אזהרות).")
+        _render_export_pair(
+            button_label="📊 צור Excel מאוחד",
+            spinner_text="📊 מייצר Excel...",
+            build_fn=lambda p: save_batch_to_excel(results, p),
+            out_path=output_dir / f"_assembly_{ts}.xlsx",
+            state_key="asm_xlsx_path",
+            mime="application/vnd.openxmlformats-officedocument."
+                 "spreadsheetml.sheet",
+            btn_key="btn_xlsx",
+            dl_key="dl_xlsx",
+            err_label="Excel",
+        )
+
+    with tab_pdf:
+        st.caption("דוח PDF שמציג את כל השרטוטים ברצף — כל שרטוט "
+                   "בעמוד משלו עם פירוט מלא (פריט, חומר, ציפויים, "
+                   "תקנים, הערות, מאסטר מוביל).")
+        _render_export_pair(
+            button_label="📕 צור PDF מאוחד",
+            spinner_text="📄 מייצר PDF...",
+            build_fn=lambda p: build_batch_pdf(results, p),
+            out_path=output_dir / f"_assembly_{ts}.pdf",
+            state_key="asm_pdf_path",
+            mime="application/pdf",
+            btn_key="btn_pdf",
+            dl_key="dl_pdf",
+            err_label="PDF",
+        )

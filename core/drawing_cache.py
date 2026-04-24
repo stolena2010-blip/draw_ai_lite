@@ -28,7 +28,10 @@ logger = logging.getLogger(__name__)
 # v3: Compound master matching (Silver over Nickel וכו') — מחייב הרצה מחדש
 # v4: תיקון _detect_primary_type — משתמש ב-type/type_he בלבד (Silver OVER Nickel)
 # v5: הוספת match_details + layer_details בתוצאות master matching
-CACHE_VERSION = "v5"
+# v6: מוד מכלולים משתמש ב-extract_drawing המלא (Stage 3 + master matching) —
+#     מבטל cache ישן של מוד מכלולים הישן ש-לא כלל מאסטרים
+# v7: bump ידני כדי לאלץ ניתוח מחדש
+CACHE_VERSION = "v7"
 
 _CACHE_DIR = Path("output/.cache")
 
