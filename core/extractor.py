@@ -11,8 +11,8 @@ from core.pdf_utils import pdf_to_images
 from core.prompts import STAGE_1_PROMPT, STAGE_2_PROMPT, STAGE_3_PROMPT_TEMPLATE
 from core.cost_tracker import DrawingCostTracker, calculate_cost
 from core.master_matcher import match_all_coatings
-from core.validators import run_all_validators
-from core.two_pass import compare_and_merge, should_run_two_pass
+from core.validators import run_all_validators, normalize_revision
+from core.two_pass import compare_and_merge, should_run_two_pass, compare_identity_fields
 from core.ocr_fallback import (
     is_ocr_available,
     extract_text_from_pdf,
@@ -146,6 +146,31 @@ def _reconcile_part_number(stage1: dict, filename: str) -> None:
         logger.info(f"📝 part_number הושלם משם הקובץ: {fname_pn}")
 
 
+_REV_OK_RE = re.compile(r"^[A-Z]{1,2}[0-9]?$|^-$|^[0-9]{1,2}$")
+
+
+def _identity_fields_look_suspicious(stage1: dict, filename: str) -> bool:
+    """האם ה-P/N או ה-Rev שחולצו בחשד לשגיאת OCR?
+
+    Red flags:
+    - Rev בפורמט לא שגרתי (מקף בסוף, >2 תווים, תווים לא-אלפאנומריים).
+    - P/N חולץ, מועמד סביר קיים בשם הקובץ, והם שונים משמעותית.
+    - drawing_number ריק אבל P/N קיים (לפעמים Vision מבלבל בין השדות).
+    """
+    rev = (stage1.get("revision") or "").strip().upper()
+    if rev and not _REV_OK_RE.match(rev):
+        return True
+
+    extracted_pn = (stage1.get("part_number") or "").strip().upper()
+    fname_pn = _extract_pn_from_filename(filename).upper()
+    if extracted_pn and fname_pn and fname_pn not in extracted_pn and extracted_pn not in fname_pn:
+        dwg = (stage1.get("drawing_number") or "").strip().upper()
+        if not (fname_pn in dwg or dwg in fname_pn):
+            return True
+
+    return False
+
+
 def _proc_to_str(p) -> str:
     """ממיר תהליך (str או dict) למחרוזת אחת לתצוגה / סיכום."""
     if isinstance(p, dict):
@@ -234,6 +259,29 @@ def extract_drawing(pdf_path: str | Path, use_ocr_fallback: bool = True) -> dict
         except Exception as exc:
             logger.warning("Stage 1 retry נכשל: %s", exc)
 
+    # ─── Two-pass זיהוי: Rev/P/N חשודים ───
+    # מריץ Stage 1 שנית רק אם יש red flag — Rev עם פורמט חריג או P/N שלא
+    # תואם למועמד משם הקובץ. מטרה: לתפוס שגיאות OCR של אות יחידה (C↔V, T↔1).
+    identity_mismatch_warnings: list[dict] = []
+    if _identity_fields_look_suspicious(stage1, pdf_path.name):
+        logger.info("🔍 Rev/P/N חשודים — מריץ Stage 1 שנית לאימות זהות...")
+        try:
+            stage1_pass2, usage_pass2 = _safe_call(
+                _call_vision, client, deployment, stage1_prompt, images
+            )
+            tracker.add_stage(
+                "stage_1_identity_verify",
+                calculate_cost(usage_pass2, deployment),
+            )
+            identity_mismatch_warnings = compare_identity_fields(stage1, stage1_pass2)
+            if identity_mismatch_warnings:
+                logger.warning(
+                    "⚠️ Two-pass זיהוי: נמצאו %d אי-התאמות ב-P/N/Rev",
+                    len(identity_mismatch_warnings),
+                )
+        except Exception as exc:
+            logger.warning("Stage 1 identity-verify נכשל: %s", exc)
+
     # ─── Stage 2 — תהליכים ───
     logger.info("Stage 2: חילוץ תהליכים...")
     stage2_prompt = (
@@ -309,6 +357,14 @@ def extract_drawing(pdf_path: str | Path, use_ocr_fallback: bool = True) -> dict
     # ─── Post-processing: השלמה / תיקון part_number ───
     _reconcile_part_number(stage1, pdf_path.name)
 
+    # ─── Post-processing: ניקוי Rev (מקפים/רווחים מיותרים בקצוות) ───
+    rev_raw = (stage1.get("revision") or "").strip()
+    if rev_raw:
+        rev_clean = normalize_revision(rev_raw)
+        if rev_clean != rev_raw:
+            logger.info(f"📝 Rev נוקה: '{rev_raw}' → '{rev_clean}'")
+            stage1["revision"] = rev_clean
+
     # ─── Stage 3 — סיכום עברי ───
     logger.info("Stage 3: יצירת סיכום עברי...")
     coatings_str = ", ".join(_proc_to_str(c) for c in stage2.get("coating_processes", []) if _proc_to_str(c))
@@ -329,9 +385,14 @@ def extract_drawing(pdf_path: str | Path, use_ocr_fallback: bool = True) -> dict
         logger.warning("Stage 3 נכשל — מדלג על סיכום עברי: %s", exc)
         hebrew_summary = ""
 
-    # ─── ולידציה — RAL, מותגים, סיווג ציפויים, אריזה ───
-    validation_warnings = run_all_validators({**stage1, **stage2})
-    all_warnings = two_pass_warnings + validation_warnings
+    # ─── ולידציה — RAL, מותגים, ציפוי, עובי, Rev, P/N vs filename, אריזה ───
+    filename_pn_candidate = _extract_pn_from_filename(pdf_path.name)
+    validation_warnings = run_all_validators(
+        {**stage1, **stage2},
+        filename=pdf_path.name,
+        filename_pn=filename_pn_candidate,
+    )
+    all_warnings = two_pass_warnings + identity_mismatch_warnings + validation_warnings
     if all_warnings:
         logger.warning(
             "⚠️ ולידציה: %d אזהרות נמצאו (%d קריטיות)",

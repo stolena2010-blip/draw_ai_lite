@@ -1,5 +1,5 @@
 """
-Two-Pass Extraction — מריץ Stage 2 פעמיים ומשווה שדות קריטיים (RAL, מותגים).
+Two-Pass Extraction — מריץ Stage 2 פעמיים ומשווה שדות קריטיים (RAL, מותגים, P/N, Rev).
 אם יש אי-התאמה → מסמן [VERIFY] ומוסיף אזהרה ל-_verification_warnings.
 """
 import json
@@ -7,6 +7,41 @@ import logging
 import re
 
 logger = logging.getLogger(__name__)
+
+
+def compare_identity_fields(s1: dict, s2: dict) -> list[dict]:
+    """משווה שדות זיהוי (P/N, Rev, drawing_number) בין שתי הרצות Stage 1.
+
+    שגיאת OCR בשדות האלה קריטית כי הם מזהי המפתח של השרטוט.
+    מחזיר רשימת warnings — ריקה אם אין מחלוקת.
+    """
+    warnings: list[dict] = []
+
+    for field, label in [
+        ("part_number", "P/N"),
+        ("revision", "Rev"),
+        ("drawing_number", "Drawing Number"),
+    ]:
+        v1 = (s1.get(field) or "").strip()
+        v2 = (s2.get(field) or "").strip()
+        # שני הצדדים ריקים או זהים — אין מחלוקת
+        if v1 == v2:
+            continue
+        # אחד ריק והשני מלא — לא ממש מחלוקת, פשוט השלמה
+        if not v1 or not v2:
+            continue
+        warnings.append({
+            "type": f"{field.upper()}_MISMATCH",
+            "severity": "HIGH",
+            "source": "two_pass",
+            "value": f"הרצה 1: {v1} | הרצה 2: {v2}",
+            "message": (
+                f"{label} שונה בין שתי ההרצות. ייתכן שגיאת OCR "
+                f"(C↔V, T↔1, 0↔O, N↔B וכו') — בדוק ידנית מול השרטוט."
+            ),
+            "suggestion": f"ערך אחד מתוך: {v1}, {v2} — אבל מי הנכון?",
+        })
+    return warnings
 
 _RAL_RE = re.compile(r'RAL\s*\d{3,4}', re.IGNORECASE)
 _BRAND_BY_RE = re.compile(r'\b[A-Z]{3,}\s+BY\s+[A-Z]{3,}\b')

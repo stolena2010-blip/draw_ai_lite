@@ -222,11 +222,173 @@ def validate_packing_note(packaging_notes: dict | str) -> dict | None:
     return None
 
 
+# ─── Thickness unit validator ─────────────────────────────────────────────────
+
+# תופס מספר או טווח + יחידה: "25um", "12-20 µm", "40-60 MM", "0.5 mil"
+_THICKNESS_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*-?\s*(\d+(?:\.\d+)?)?\s*(µm|μm|um|micron|mic|mm|mil|in)",
+    re.IGNORECASE,
+)
+
+
+def _parse_max_thickness_mm(thickness: str) -> float | None:
+    """מחזיר את הערך המקסימלי מתוך שדה thickness כמיליטרים, או None."""
+    if not thickness:
+        return None
+    m = _THICKNESS_RE.search(thickness)
+    if not m:
+        return None
+    v1 = float(m.group(1))
+    v2 = float(m.group(2)) if m.group(2) else v1
+    vmax = max(v1, v2)
+    unit = m.group(3).lower()
+    # נרמל למילימטרים
+    if unit in ("µm", "μm", "um", "micron", "mic"):
+        return vmax / 1000.0
+    if unit == "mm":
+        return vmax
+    if unit == "mil":
+        return vmax * 0.0254  # 1 mil = 0.0254 mm
+    if unit == "in":
+        return vmax * 25.4
+    return None
+
+
+def validate_thickness_units(report_json: dict) -> list[dict]:
+    """מזהיר על יחידות עובי חשודות.
+
+    ציפויים וצביעות כמעט תמיד 0.5μm–500μm (0.0005–0.5 מ"מ). אם המודל מחזיר
+    `MM` עם ערך >= 1 — כמעט ודאי שהיחידה האמיתית הייתה μm (micrometer) והאות
+    μ/µ הומרה ל-M (שגיאת OCR נפוצה). הפרש פקטור 1000.
+    """
+    warnings: list[dict] = []
+
+    for kind, key in (("coating", "coating_processes"), ("painting", "painting_processes")):
+        for proc in report_json.get(key) or []:
+            if not isinstance(proc, dict):
+                continue
+            raw = (proc.get("thickness") or "").strip()
+            if not raw:
+                continue
+            m = _THICKNESS_RE.search(raw)
+            if not m:
+                continue
+            unit = m.group(3).lower()
+            v1 = float(m.group(1))
+            v2 = float(m.group(2)) if m.group(2) else v1
+            vmax = max(v1, v2)
+            # חשוד: MM עם ערך >= 1 (1mm זה כבר 1000μm — לא ריאלי לציפוי/צבע)
+            if unit == "mm" and vmax >= 1.0:
+                label = (proc.get("type_he") or proc.get("type") or "").strip()
+                warnings.append({
+                    "type": "SUSPICIOUS_THICKNESS_UNIT",
+                    "severity": "HIGH",
+                    "source": f"{kind}:{label}",
+                    "value": raw,
+                    "message": (
+                        f"עובי '{raw}' ב-{kind} — יחידת MM עם ערך גבוה. "
+                        f"כמעט ודאי שהיחידה האמיתית היא μm (micrometer). "
+                        f"בדוק ידנית."
+                    ),
+                    "suggestion": f"ייתכן שצריך להיות {vmax:.0f}μm במקום {vmax:.0f}mm",
+                })
+
+    return warnings
+
+
+# ─── Revision sanity check ────────────────────────────────────────────────────
+
+_REV_VALID_RE = re.compile(r"^[A-Z]{1,2}[0-9]?$|^-$|^[0-9]{1,2}$")
+
+
+def normalize_revision(rev: str) -> str:
+    """נקה ערך Rev מרווחים ומקפים מיותרים.
+
+    דוגמאות: 'E-' → 'E', ' A ' → 'A', '--' → '-'.
+    לא משנה ערכים תקינים (A, B, C, 01, etc.).
+    """
+    if not rev:
+        return ""
+    cleaned = rev.strip()
+    # הסר מקפים וסוגריים ורווחים בקצוות, אבל שמור '-' יחיד (מסמן "ללא גרסה")
+    if cleaned == "-":
+        return "-"
+    cleaned = cleaned.strip("- \t()[]")
+    return cleaned
+
+
+def validate_revision(report_json: dict) -> list[dict]:
+    """מזהיר אם Rev בפורמט לא שגרתי (אחרי normalize)."""
+    warnings: list[dict] = []
+    rev = (report_json.get("revision") or "").strip()
+    if not rev:
+        return warnings
+    normalized = normalize_revision(rev)
+    # אזהרה אם הפורמט חריג — Rev בד"כ 1-2 אותיות או ספרה קצרה
+    if not _REV_VALID_RE.match(normalized.upper()):
+        warnings.append({
+            "type": "SUSPICIOUS_REVISION",
+            "severity": "MEDIUM",
+            "source": "title_block",
+            "value": rev,
+            "message": (
+                f"ערך Revision '{rev}' בפורמט חריג. "
+                f"ערך תקין בד\"כ אות אחת (A-Z) או 1-2 ספרות."
+            ),
+            "suggestion": "בדוק ידנית מול השרטוט.",
+        })
+    return warnings
+
+
+# ─── Part number vs filename cross-check ──────────────────────────────────────
+
+def validate_pn_filename_match(report_json: dict, filename: str,
+                                filename_candidate: str) -> list[dict]:
+    """מזהיר אם ה-P/N שחולץ שונה מהותית מהמועמד משם הקובץ.
+
+    משווה רק כשיש מועמד ברור משם הקובץ (אחרת לא נותן false positives).
+    """
+    warnings: list[dict] = []
+    if not filename_candidate:
+        return warnings
+    extracted = (report_json.get("part_number") or "").strip().upper()
+    candidate = filename_candidate.strip().upper()
+    if not extracted or extracted == candidate:
+        return warnings
+    # נוגע גם ב-drawing_number — לפעמים הוא שונה מ-P/N אבל כולל את המזהה
+    dwg = (report_json.get("drawing_number") or "").strip().upper()
+    if candidate in extracted or extracted in candidate:
+        return warnings
+    if dwg and (candidate in dwg or dwg in candidate):
+        return warnings
+    # Levenshtein קצר — אם 1-2 תווים שונים, ייתכן OCR אך שווה לדווח
+    ratio = SequenceMatcher(None, extracted, candidate).ratio()
+    warnings.append({
+        "type": "PN_FILENAME_MISMATCH",
+        "severity": "HIGH" if ratio < 0.6 else "MEDIUM",
+        "source": filename,
+        "value": f"חולץ: {extracted} | שם קובץ: {candidate}",
+        "message": (
+            f"P/N שחולץ ({extracted}) שונה מהמזהה בשם הקובץ ({candidate}). "
+            f"ייתכן שגיאת OCR (C↔V, T↔1, 0↔O, μ↔M) — בדוק ידנית."
+        ),
+        "suggestion": "השווה את ה-P/N לכותרת השרטוט.",
+    })
+    return warnings
+
+
 # ─── Combined validator ───────────────────────────────────────────────────────
 
-def run_all_validators(report_json: dict) -> list[dict]:
+def run_all_validators(report_json: dict,
+                       *, filename: str = "", filename_pn: str = "") -> list[dict]:
     """
     מריץ את כל הולידטורים על דוח חילוץ ומחזיר רשימת אזהרות.
+
+    Args:
+        report_json: תוצאת החילוץ.
+        filename: שם הקובץ המקורי (לדיווח בלבד).
+        filename_pn: מועמד P/N שנגזר משם הקובץ (מ-_extract_pn_from_filename).
+                     אם ריק — לא תרוץ בדיקת cross-check.
     """
     warnings: list[dict] = []
     warnings.extend(validate_ral_codes(report_json))
@@ -234,6 +396,9 @@ def run_all_validators(report_json: dict) -> list[dict]:
     warnings.extend(validate_coating_classification(
         report_json.get("coating_processes", [])
     ))
+    warnings.extend(validate_thickness_units(report_json))
+    warnings.extend(validate_revision(report_json))
+    warnings.extend(validate_pn_filename_match(report_json, filename, filename_pn))
     packing_warning = validate_packing_note(
         report_json.get("packaging_notes", {})
     )

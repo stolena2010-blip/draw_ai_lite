@@ -31,7 +31,9 @@ logger = logging.getLogger(__name__)
 # v6: מוד מכלולים משתמש ב-extract_drawing המלא (Stage 3 + master matching) —
 #     מבטל cache ישן של מוד מכלולים הישן ש-לא כלל מאסטרים
 # v7: bump ידני כדי לאלץ ניתוח מחדש
-CACHE_VERSION = "v7"
+# v8: ולידטורים חדשים (עובי, Rev, P/N-vs-filename) + two-pass לזיהוי
+#     — תוצאות ישנות חסרות את האזהרות החדשות
+CACHE_VERSION = "v8"
 
 _CACHE_DIR = Path("output/.cache")
 
