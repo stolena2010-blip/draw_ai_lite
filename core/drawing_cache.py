@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 # v7: bump ידני כדי לאלץ ניתוח מחדש
 # v8: ולידטורים חדשים (עובי, Rev, P/N-vs-filename) + two-pass לזיהוי
 #     — תוצאות ישנות חסרות את האזהרות החדשות
-CACHE_VERSION = "v8"
+# v9: Tier 1+2 — Elbit UN prefix, standard format, OCR grounding,
+#     סינון process entries ריקים
+CACHE_VERSION = "v9"
 
 _CACHE_DIR = Path("output/.cache")
 

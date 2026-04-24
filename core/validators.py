@@ -296,6 +296,101 @@ def validate_thickness_units(report_json: dict) -> list[dict]:
     return warnings
 
 
+# ─── Standard format validator ────────────────────────────────────────────────
+
+# דפוסים של משפחות תקנים מוכרות. ערך שלא תואם אף אחד — חשוד (OCR error / הזיה).
+# נוגע רק בתחילת המחרוזת (^...) — אחרי "MIL-DTL-5541" יכול להופיע TYPE/CLASS וכו'.
+_STANDARD_PATTERNS = [
+    # US Military: MIL-DTL-5541, MIL-A-8625F, MIL-PRF-85285, MIL-C-26074
+    re.compile(r"^MIL[-\s]+[A-Z]{1,5}[-\s]+\d{3,}", re.IGNORECASE),
+    # SAE/AMS: SAE-AMS-4027, SAE-AMS-C-26074, AMS-QQ-A-250/11, AMS 2700
+    re.compile(r"^(?:SAE[-\s]+)?AMS[-\s]*(?:[A-Z][-\s]*)?(?:QQ[-\s]*[A-Z][-\s]*)?\d{2,}", re.IGNORECASE),
+    # ASTM: ASTM B633, ASTM A 564, ASTM-B-209, ASTM D3951
+    re.compile(r"^ASTM[-\s]*[A-Z][-\s]*\d{2,}", re.IGNORECASE),
+    # ISO: ISO 9001, ISO 15730, ISO 3098/1, ISO 1302
+    re.compile(r"^ISO[-\s]*\d{3,}", re.IGNORECASE),
+    # QQ (legacy US mil-spec): QQ-P-416, QQ-Z-325, QQ-S-365
+    re.compile(r"^QQ[-\s]*[A-Z][-\s]*\d{2,}", re.IGNORECASE),
+    # RAFAEL PS: PS-111.21, PS 111.24
+    re.compile(r"^PS[-\s]*\d+(?:\.\d+)?", re.IGNORECASE),
+    # RAFAEL RAFDOCS
+    re.compile(r"^RAFDOCS[-\s]*\d+", re.IGNORECASE),
+    # FED-STD: FED-STD-595, FED-STD-101
+    re.compile(r"^FED[-\s]*STD[-\s]*\d+", re.IGNORECASE),
+    # A-A (commercial item description)
+    re.compile(r"^A[-\s]*A[-\s]*\d{2,}", re.IGNORECASE),
+    # AS / NAS (aerospace standard): AS478, NAS123, NASM series
+    re.compile(r"^NAS[MC]?\d+", re.IGNORECASE),
+    re.compile(r"^AS\d+(?:[-/]\d+[A-Z]?)?", re.IGNORECASE),
+    # ASME Y14.5, ASME B46.1
+    re.compile(r"^ASME[-\s]+[A-Z]\d+(?:\.\d+)?", re.IGNORECASE),
+    # DIN, EN (European)
+    re.compile(r"^(?:DIN|EN)[-\s]*\d{2,}", re.IGNORECASE),
+    # GEN_ (RAFAEL material spec)
+    re.compile(r"^GEN[-_]\d+", re.IGNORECASE),
+    # ECSS (European Space), JIS (Japan), BS (British)
+    re.compile(r"^(?:ECSS|JIS|BS)[-\s]*[A-Z]?\d+", re.IGNORECASE),
+]
+
+# ערכים שמופיעים כ"תקן" אבל הם בעצם תוויות — לא לדגל
+_STANDARD_BENIGN_LABELS = {
+    "ISO STANDARDS", "SEE EDR", "SEE SHEET", "SEE NOTE", "SEE DRAWING",
+    "SEE MODEL", "PROTECTED",
+}
+
+
+def validate_standard_formats(report_json: dict) -> list[dict]:
+    """מזהיר אם תקן לא תואם לפורמטים מוכרים.
+
+    תופס OCR errors נפוצים: "TIPE" (במקום TYPE) בתוך שם תקן, "CLASS @"
+    (במקום "CLASS 2"), תקן מומצא לחלוטין וכו'.
+    """
+    warnings: list[dict] = []
+    for std in report_json.get("standards") or []:
+        if not isinstance(std, str):
+            continue
+        val = std.strip()
+        if not val or len(val) < 3:
+            continue
+        if val.upper() in _STANDARD_BENIGN_LABELS:
+            continue
+        # אם תואם לפחות דפוס אחד — תקין
+        if any(p.match(val) for p in _STANDARD_PATTERNS):
+            # בנוסף — בדיקת "TYPE" לעומת "TIPE", "CLASS" לעומת "@"
+            if re.search(r"\bTIPE\b", val, re.IGNORECASE):
+                warnings.append({
+                    "type": "STANDARD_OCR_TYPO",
+                    "severity": "HIGH",
+                    "source": "standards",
+                    "value": val[:100],
+                    "message": f"תקן '{val[:60]}' מכיל 'TIPE' — כמעט ודאי OCR ל-'TYPE'.",
+                    "suggestion": "החלף TIPE ב-TYPE",
+                })
+            if re.search(r"CLASS\s+[@#&*]", val, re.IGNORECASE):
+                warnings.append({
+                    "type": "STANDARD_OCR_TYPO",
+                    "severity": "HIGH",
+                    "source": "standards",
+                    "value": val[:100],
+                    "message": f"תקן '{val[:60]}' מכיל 'CLASS @/#/&/*' — OCR של ספרה.",
+                    "suggestion": "בדוק את הספרה המקורית בשרטוט",
+                })
+            continue
+        # לא תואם אף דפוס
+        warnings.append({
+            "type": "UNRECOGNIZED_STANDARD_FORMAT",
+            "severity": "MEDIUM",
+            "source": "standards",
+            "value": val[:100],
+            "message": (
+                f"התקן '{val[:60]}' לא בפורמט שגרתי (MIL/AMS/ASTM/ISO/QQ/PS/...). "
+                f"ייתכן שגיאת OCR או תקן לא־סטנדרטי."
+            ),
+            "suggestion": "אמת מול השרטוט.",
+        })
+    return warnings
+
+
 # ─── Revision sanity check ────────────────────────────────────────────────────
 
 _REV_VALID_RE = re.compile(r"^[A-Z]{1,2}[0-9]?$|^-$|^[0-9]{1,2}$")
@@ -377,10 +472,120 @@ def validate_pn_filename_match(report_json: dict, filename: str,
     return warnings
 
 
+# ─── OCR grounding validator ──────────────────────────────────────────────────
+
+# תווים שמפרידים טוקנים בטקסט (לא אלפא-נומריים)
+_TOKENIZE_RE = re.compile(r"[A-Z0-9]+")
+
+
+def _tokenize(s: str) -> set:
+    """מפצל מחרוזת לסט טוקנים אלפא-נומריים (UPPERCASE)."""
+    return set(_TOKENIZE_RE.findall((s or "").upper()))
+
+
+def _coverage_ratio(value: str, ocr_tokens: set) -> tuple[float, int]:
+    """יחס כיסוי: כמה מהטוקנים של value מופיעים ב-ocr_tokens.
+
+    מחזיר (ratio, n_tokens). ratio=1.0 = הכל מופיע ב-OCR. ratio<0.6 = חשוד.
+    """
+    tokens = _tokenize(value)
+    # סנן טוקנים קצרים (<=2 תווים) שעלולים להיות מילות קישור
+    significant = {t for t in tokens if len(t) >= 3}
+    if not significant:
+        return 1.0, 0  # לא ניתן לבדיקה
+    matched = sum(1 for t in significant if t in ocr_tokens)
+    return matched / len(significant), len(significant)
+
+
+def validate_ocr_grounded(report_json: dict, ocr_text: str,
+                           min_coverage: float = 0.6) -> list[dict]:
+    """מוודא ששדות זיהוי ותקנים מופיעים בטקסט ה-OCR.
+
+    OCR לא מושלם — לכן דיגול MEDIUM בלבד. אם רק 60% מהטוקנים של ערך שחולץ
+    מופיעים ב-OCR — כמעט ודאי הזיה של המודל (מודל Vision לפעמים ממציא
+    תקנים שנראים אמינים אבל לא מופיעים בשרטוט).
+
+    Skip-conditions:
+    - OCR text ריק → דלג לגמרי (אי אפשר לבדוק)
+    - ערכים עם <2 טוקנים משמעותיים → דלג
+    """
+    warnings: list[dict] = []
+    if not ocr_text or len(ocr_text.strip()) < 50:
+        return warnings
+
+    ocr_tokens = _tokenize(ocr_text)
+    if len(ocr_tokens) < 20:
+        # OCR חלש מדי — לא אמין לבדיקה
+        return warnings
+
+    # 1. תקנים
+    for std in report_json.get("standards") or []:
+        if not isinstance(std, str):
+            continue
+        val = std.strip()
+        if not val:
+            continue
+        ratio, n = _coverage_ratio(val, ocr_tokens)
+        if n >= 2 and ratio < min_coverage:
+            warnings.append({
+                "type": "STANDARD_NOT_IN_OCR",
+                "severity": "MEDIUM",
+                "source": "standards",
+                "value": val[:100],
+                "message": (
+                    f"התקן '{val[:60]}' לא נמצא בטקסט OCR ({ratio:.0%} כיסוי). "
+                    f"ייתכן הזיה של המודל — בדוק ידנית מול השרטוט."
+                ),
+                "suggestion": "אמת שהתקן אכן כתוב בשרטוט המקורי.",
+            })
+
+    # 2. P/N
+    pn = (report_json.get("part_number") or "").strip()
+    if pn:
+        ratio, n = _coverage_ratio(pn, ocr_tokens)
+        # 2+ טוקנים (לא סתם "A" או "B"), <50% כיסוי = חשוד
+        if n >= 2 and ratio < 0.5:
+            warnings.append({
+                "type": "PN_NOT_IN_OCR",
+                "severity": "HIGH",
+                "source": "title_block",
+                "value": pn,
+                "message": (
+                    f"P/N '{pn}' לא נמצא בטקסט OCR ({ratio:.0%} כיסוי). "
+                    f"ייתכן הזיה או שגיאת OCR חמורה — בדוק ידנית."
+                ),
+                "suggestion": "אמת מול כותרת השרטוט.",
+            })
+
+    # 3. שמות יצרני צבע (brands ב-painting_processes)
+    for proc in report_json.get("painting_processes") or []:
+        if not isinstance(proc, dict):
+            continue
+        brand = (proc.get("brand") or "").strip()
+        if not brand:
+            continue
+        ratio, n = _coverage_ratio(brand, ocr_tokens)
+        if n >= 1 and ratio < 0.6:
+            warnings.append({
+                "type": "BRAND_NOT_IN_OCR",
+                "severity": "MEDIUM",
+                "source": "painting_processes",
+                "value": brand[:80],
+                "message": (
+                    f"יצרן צבע '{brand}' לא נמצא בטקסט OCR — ייתכן הזיה."
+                ),
+                "suggestion": "אמת ששם היצרן מופיע בשרטוט.",
+            })
+
+    return warnings
+
+
 # ─── Combined validator ───────────────────────────────────────────────────────
 
 def run_all_validators(report_json: dict,
-                       *, filename: str = "", filename_pn: str = "") -> list[dict]:
+                       *, filename: str = "",
+                       filename_pn: str = "",
+                       ocr_text: str = "") -> list[dict]:
     """
     מריץ את כל הולידטורים על דוח חילוץ ומחזיר רשימת אזהרות.
 
@@ -389,6 +594,8 @@ def run_all_validators(report_json: dict,
         filename: שם הקובץ המקורי (לדיווח בלבד).
         filename_pn: מועמד P/N שנגזר משם הקובץ (מ-_extract_pn_from_filename).
                      אם ריק — לא תרוץ בדיקת cross-check.
+        ocr_text: טקסט OCR של השרטוט (לבדיקת grounding של תקנים/מותגים).
+                  אם ריק — דלג על OCR grounding.
     """
     warnings: list[dict] = []
     warnings.extend(validate_ral_codes(report_json))
@@ -399,6 +606,8 @@ def run_all_validators(report_json: dict,
     warnings.extend(validate_thickness_units(report_json))
     warnings.extend(validate_revision(report_json))
     warnings.extend(validate_pn_filename_match(report_json, filename, filename_pn))
+    warnings.extend(validate_standard_formats(report_json))
+    warnings.extend(validate_ocr_grounded(report_json, ocr_text))
     packing_warning = validate_packing_note(
         report_json.get("packaging_notes", {})
     )

@@ -95,8 +95,11 @@ def _extract_pn_from_filename(filename: str) -> str:
     for prefix in ("B2BDRAW_", "DRAW_", "_"):
         if stem.startswith(prefix):
             stem = stem[len(prefix):]
-    # פיצול לסגמנטים לפי מקף, קו תחתון או סוגריים
-    segments = re.split(r"[-_()\s]+", stem)
+    # Elbit: קבצים בפורמט "un<digits>-..." — ה-"UN" הוא prefix URL-legacy,
+    # לא חלק מה-P/N. מסירים אותו כדי לא להחזיר מועמד שגוי כמו "UN8554".
+    stem = re.sub(r"^UN(?=\d)", "", stem)
+    # פיצול לסגמנטים לפי מקף, קו תחתון, סוגריים או # (Elbit)
+    segments = re.split(r"[-_()#\s]+", stem)
     candidates: list[str] = []
     for seg in segments:
         for m in _PN_PATTERN.findall(seg):
@@ -183,6 +186,20 @@ def _proc_to_str(p) -> str:
         parts = [x for x in [head, thickness, std] if x]
         return " — ".join(parts) + rohs
     return str(p or "").strip()
+
+
+def _is_meaningful_process(p) -> bool:
+    """האם תהליך מכיל מספיק מידע כדי להיות שווה שימור?
+
+    מסנן רשומות "רעש" — dict ריק או עם כל השדות המזהים ריקים.
+    """
+    if not isinstance(p, dict):
+        return bool(str(p or "").strip())
+    # לפחות אחד מהשדות המזהים חייב להיות מלא
+    for key in ("type", "type_he", "name", "standard"):
+        if (p.get(key) or "").strip():
+            return True
+    return False
 
 
 def extract_drawing(pdf_path: str | Path, use_ocr_fallback: bool = True) -> dict:
@@ -347,6 +364,14 @@ def extract_drawing(pdf_path: str | Path, use_ocr_fallback: bool = True) -> dict
         except Exception as exc:
             logger.warning("Two-Pass נכשל: %s", exc)
 
+    # ─── Post-processing: סנן רשומות ציפוי/צביעה ריקות (רעש מהמודל) ───
+    for key in ("coating_processes", "painting_processes"):
+        before = stage2.get(key) or []
+        after = [p for p in before if _is_meaningful_process(p)]
+        if len(after) < len(before):
+            logger.info(f"📝 {key}: סוננו {len(before) - len(after)} רשומות ריקות")
+        stage2[key] = after
+
     # ─── Post-processing: חילוץ material מתוך NOTES אם חסר ───
     if not (stage1.get("material") or "").strip():
         material_from_notes = _extract_material_from_notes(stage2.get("notes", ""))
@@ -385,12 +410,13 @@ def extract_drawing(pdf_path: str | Path, use_ocr_fallback: bool = True) -> dict
         logger.warning("Stage 3 נכשל — מדלג על סיכום עברי: %s", exc)
         hebrew_summary = ""
 
-    # ─── ולידציה — RAL, מותגים, ציפוי, עובי, Rev, P/N vs filename, אריזה ───
+    # ─── ולידציה — RAL, מותגים, ציפוי, עובי, Rev, P/N, פורמט תקן, OCR grounding ───
     filename_pn_candidate = _extract_pn_from_filename(pdf_path.name)
     validation_warnings = run_all_validators(
         {**stage1, **stage2},
         filename=pdf_path.name,
         filename_pn=filename_pn_candidate,
+        ocr_text=ocr_text,
     )
     all_warnings = two_pass_warnings + identity_mismatch_warnings + validation_warnings
     if all_warnings:
