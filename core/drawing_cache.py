@@ -39,7 +39,9 @@ logger = logging.getLogger(__name__)
 #      OCR grounding מטפל ב-PN טוקן-יחיד
 # v11: ANSI + internal doc IDs (AMAT/IAI/KLA/KRETOS) בפורמטים מוכרים;
 #      UNRECOGNIZED_STANDARD_FORMAT הופחת ל-LOW severity
-CACHE_VERSION = "v11"
+# v12: Auto-correct P/N כאשר שם הקובץ מופיע ב-OCR וה-P/N שחולץ לא;
+#      הרחבת תוויות benign (ISO, N/A, NONE, FE/ZN 8, TYPE/CLASS)
+CACHE_VERSION = "v12"
 
 _CACHE_DIR = Path("output/.cache")
 

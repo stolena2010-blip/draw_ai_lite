@@ -143,6 +143,89 @@ def test_standard_still_flags_pure_gibberish():
     assert warnings[0]["type"] == "UNRECOGNIZED_STANDARD_FORMAT"
 
 
+# ─── Benign labels — expanded set ─────────────────────────────────────────────
+
+def test_benign_labels_not_flagged():
+    """תוויות גנריות שמופיעות כ'תקן' אבל אינן — לא לדגל."""
+    from core.validators import validate_standard_formats
+    data = {"standards": [
+        "ISO",            # לבד, לא תקן ספציפי
+        "ISO STANDARDS",
+        "N/A", "NONE",
+        "FE/ZN 8",         # Coating notation — לא תקן
+        "TYPE II",         # חלקי של תקן אחר
+        "CLASS 3",
+    ]}
+    warnings = validate_standard_formats(data)
+    assert warnings == [], f"FP: {[w['value'] for w in warnings]}"
+
+
+# ─── P/N auto-correction ──────────────────────────────────────────────────────
+
+def test_autocorrect_pn_fixes_ocr_error():
+    """THR1510712 → TH151012 צריך להיות מתוקן אוטומטית."""
+    from core.extractor import _try_autocorrect_pn
+    stage1 = {"part_number": "TH151012", "drawing_number": "TH151012"}
+    filename = "THR1510712-(133739).PDF"
+    # OCR text שמכיל את שם הקובץ אבל לא את ה-P/N שחולץ
+    ocr = (
+        "DIMENSIONS IN MILLIMETERS. INTERPRET DRAWING ACCORDING TO "
+        "ISO STANDARDS. SURFACE TEXTURE RA 1.6. TOLERANCES UNLESS "
+        "OTHERWISE SPECIFIED. P.N. THR1510712 REV A CUSTOMER IAI. "
+        "MORE TEXT TO GET OVER 20 TOKENS THRESHOLD. MATERIAL SECTION."
+    )
+    result = _try_autocorrect_pn(stage1, filename, ocr)
+    assert result == ("TH151012", "THR1510712")
+    assert stage1["part_number"] == "THR1510712"
+    assert stage1["drawing_number"] == "THR1510712"  # drawing_number also updated
+    assert stage1["_pn_autocorrected_from"] == "TH151012"
+
+
+def test_autocorrect_pn_noop_when_both_match():
+    """שניהם מופיעים ב-OCR — לא לתקן (שניהם לגיטימיים)."""
+    from core.extractor import _try_autocorrect_pn
+    stage1 = {"part_number": "BN80760B"}
+    filename = "BN80760B-A-PD-bn80760b_a.pdf"
+    ocr = (
+        "DIMENSIONS IN MILLIMETERS. INTERPRET DRAWING ACCORDING TO "
+        "ISO STANDARDS. P.N. BN80760B REV A CUSTOMER RAFAEL. "
+        "MORE TEXT TO GET OVER 20 TOKENS. MATERIAL SECTION."
+    )
+    result = _try_autocorrect_pn(stage1, filename, ocr)
+    assert result is None
+    assert stage1["part_number"] == "BN80760B"  # unchanged
+
+
+def test_autocorrect_pn_noop_when_substring():
+    """אחד תת-מחרוזת של השני — כנראה שניהם לגיטימיים (prefixes/suffixes)."""
+    from core.extractor import _try_autocorrect_pn
+    stage1 = {"part_number": "BN80760B-A"}
+    filename = "BN80760B_A.pdf"
+    ocr = "MATCHING STUFF WITH BN80760B APPEARING MULTIPLE TIMES " * 5
+    result = _try_autocorrect_pn(stage1, filename, ocr)
+    assert result is None
+
+
+def test_autocorrect_pn_noop_when_no_candidate():
+    """בלי מועמד משם הקובץ — לא לתקן."""
+    from core.extractor import _try_autocorrect_pn
+    stage1 = {"part_number": "SOMETHING"}
+    filename = "random.pdf"
+    ocr = "SOME LONG OCR TEXT WITH MANY TOKENS TO GET OVER THRESHOLD " * 5
+    result = _try_autocorrect_pn(stage1, filename, ocr)
+    assert result is None
+
+
+def test_autocorrect_pn_noop_when_candidate_not_in_ocr():
+    """מועמד שם הקובץ לא מופיע ב-OCR — אין עדות שהוא נכון. לא לתקן."""
+    from core.extractor import _try_autocorrect_pn
+    stage1 = {"part_number": "SOMETHING"}
+    filename = "BN80760B_A.pdf"
+    ocr = "SOME TEXT THAT MENTIONS NOTHING RELEVANT HERE " * 5
+    result = _try_autocorrect_pn(stage1, filename, ocr)
+    assert result is None
+
+
 # ─── OCR grounding — P/N as single token ──────────────────────────────────────
 
 def test_pn_single_token_not_in_ocr_flagged():

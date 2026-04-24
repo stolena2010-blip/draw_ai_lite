@@ -201,6 +201,60 @@ def _proc_to_str(p) -> str:
     return str(p or "").strip()
 
 
+def _try_autocorrect_pn(stage1: dict, filename: str, ocr_text: str) -> tuple[str, str] | None:
+    """מתקן P/N אוטומטית אם שם הקובץ מופיע ב-OCR וה-P/N שחולץ לא.
+
+    תנאים (כולם חייבים להתקיים):
+    1. יש מועמד P/N משם הקובץ.
+    2. ה-P/N שחולץ שונה מהמועמד משם הקובץ.
+    3. מועמד שם הקובץ מופיע ב-OCR text (לפחות 80% מהטוקנים).
+    4. ה-P/N שחולץ *לא* מופיע ב-OCR text (פחות מ-30% מהטוקנים).
+
+    מחזיר (before, after) אם בוצע תיקון, או None אחרת.
+    """
+    extracted = (stage1.get("part_number") or "").strip()
+    if not extracted:
+        return None
+    if not ocr_text or len(ocr_text) < 50:
+        return None
+    candidate = _extract_pn_from_filename(filename)
+    if not candidate:
+        return None
+    if extracted.upper() == candidate.upper():
+        return None
+    # אם מועמד שם הקובץ הוא תת־מחרוזת של ה-P/N שחולץ (או להפך) — כנראה שניהם תקינים
+    if candidate.upper() in extracted.upper() or extracted.upper() in candidate.upper():
+        return None
+
+    # טוקניזציה
+    ocr_upper = ocr_text.upper()
+    ocr_tokens = set(re.findall(r"[A-Z0-9]+", ocr_upper))
+    if len(ocr_tokens) < 20:
+        return None
+
+    def _coverage(s: str) -> float:
+        toks = set(re.findall(r"[A-Z0-9]+", s.upper()))
+        significant = {t for t in toks if len(t) >= 3}
+        if not significant:
+            return 0.0
+        return sum(1 for t in significant if t in ocr_tokens) / len(significant)
+
+    extracted_cov = _coverage(extracted)
+    candidate_cov = _coverage(candidate)
+
+    # מועמד שם הקובץ חייב להיות מאוד נוכח ב-OCR, והשחולץ — לא
+    if candidate_cov >= 0.8 and extracted_cov < 0.3:
+        stage1["part_number"] = candidate
+        # אם drawing_number היה זהה ל-extracted הישן — גם אותו נעדכן
+        dwg = (stage1.get("drawing_number") or "").strip()
+        if dwg.upper() == extracted.upper():
+            stage1["drawing_number"] = candidate
+        # סימון בשדה נסתר שהתבצע תיקון
+        stage1["_pn_autocorrected_from"] = extracted
+        return (extracted, candidate)
+    return None
+
+
 def _is_meaningful_process(p) -> bool:
     """האם תהליך מכיל מספיק מידע כדי להיות שווה שימור?
 
@@ -402,6 +456,17 @@ def extract_drawing(pdf_path: str | Path, use_ocr_fallback: bool = True) -> dict
         if rev_clean != rev_raw:
             logger.info(f"📝 Rev נוקה: '{rev_raw}' → '{rev_clean}'")
             stage1["revision"] = rev_clean
+
+    # ─── Post-processing: תיקון אוטומטי של P/N ───
+    # אם מה שחולץ לא נמצא ב-OCR, אבל מועמד משם הקובץ כן נמצא ב-OCR —
+    # כמעט ודאי שהמודל טעה ושם הקובץ מדויק. מחליפים ומתעדים.
+    pn_auto_corrected = _try_autocorrect_pn(stage1, pdf_path.name, ocr_text)
+    if pn_auto_corrected:
+        logger.info(
+            "🔧 P/N תוקן אוטומטית: '%s' → '%s' (שם הקובץ מופיע ב-OCR, הערך שחולץ לא)",
+            pn_auto_corrected[0],
+            pn_auto_corrected[1],
+        )
 
     # ─── Stage 3 — סיכום עברי ───
     logger.info("Stage 3: יצירת סיכום עברי...")

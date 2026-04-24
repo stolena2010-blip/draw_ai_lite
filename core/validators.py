@@ -346,8 +346,12 @@ _STANDARD_PATTERNS = [
 
 # ערכים שמופיעים כ"תקן" אבל הם בעצם תוויות — לא לדגל
 _STANDARD_BENIGN_LABELS = {
-    "ISO STANDARDS", "SEE EDR", "SEE SHEET", "SEE NOTE", "SEE DRAWING",
-    "SEE MODEL", "PROTECTED",
+    "ISO", "ISO STANDARDS", "ISO STANDARD",
+    "SEE EDR", "SEE SHEET", "SEE NOTE", "SEE DRAWING", "SEE MODEL",
+    "PROTECTED", "N/A", "NONE", "N.A.", "NA",
+    "FE/ZN", "FE/ZN 8", "FE/ZN 12", "FE/ZN 25",
+    "TYPE I", "TYPE II", "TYPE III", "TYPE IV",
+    "CLASS 1", "CLASS 2", "CLASS 3",
 }
 
 
