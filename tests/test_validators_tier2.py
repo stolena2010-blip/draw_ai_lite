@@ -101,6 +101,48 @@ def test_standard_accepts_tildocs_standalone():
     assert validate_standard_formats(data) == []
 
 
+def test_standard_accepts_ansi():
+    """ANSI Y14.5M, ANSI 14.5M — תקני dimensioning אמיתיים."""
+    from core.validators import validate_standard_formats
+    data = {"standards": ["ANSI Y14.5M", "ANSI 14.5M - 1982", "ANSI B18.3"]}
+    assert validate_standard_formats(data) == []
+
+
+def test_standard_accepts_internal_company_ids():
+    """תקני פנים־חברה (AMAT, IAI, KLA, KRETOS) — לא לדגל כ-unrecognized."""
+    from core.validators import validate_standard_formats
+    data = {"standards": [
+        "0250-01019",           # AMAT
+        "0250-00098",           # AMAT
+        "04.4-01-11",           # AMAT with dots
+        "5902Y004-001",         # IAI
+        "5902N800-001",         # IAI
+        "905-610019-007",       # KLA
+        "DWG.1002A315-001",     # IAI with DWG prefix
+        "I-630028 STEP 1,2",    # KRETOS
+    ]}
+    warnings = validate_standard_formats(data)
+    assert len(warnings) == 0, f"FP detected: {[w['value'] for w in warnings]}"
+
+
+def test_standard_unrecognized_severity_is_low():
+    """UNRECOGNIZED_STANDARD_FORMAT עכשיו LOW, לא MEDIUM."""
+    from core.validators import validate_standard_formats
+    data = {"standards": ["TOTALLY_BOGUS_VALUE_XXX"]}
+    warnings = validate_standard_formats(data)
+    assert len(warnings) == 1
+    assert warnings[0]["severity"] == "LOW"
+
+
+def test_standard_still_flags_pure_gibberish():
+    """מילה בודדת בלי פורמט (כמו PSSOOIOO שזה OCR של PS500100) — עדיין נדגלת."""
+    from core.validators import validate_standard_formats
+    data = {"standards": ["PSSOOIOO"]}
+    warnings = validate_standard_formats(data)
+    assert len(warnings) == 1
+    assert warnings[0]["type"] == "UNRECOGNIZED_STANDARD_FORMAT"
+
+
 # ─── OCR grounding — P/N as single token ──────────────────────────────────────
 
 def test_pn_single_token_not_in_ocr_flagged():
@@ -222,12 +264,17 @@ def test_standard_flags_class_at_sign():
 
 
 def test_standard_flags_unrecognized_format():
-    """תקן מומצא/חריג לגמרי — מזהיר."""
-    data = {"standards": ["XYZ-123", "HELLO WORLD", "NOTASTANDARD"]}
+    """תקן שהוא סתם טקסט — מזהיר.
+
+    הערה: "XYZ-123" עכשיו עובר כי הוא מתאים לדפוס doc-ID פנימי (אותיות + -
+    + ספרות). רק טקסט חופשי בלי ספרות או סימן מפריד ידגל.
+    """
+    data = {"standards": ["HELLO WORLD", "NOTASTANDARD"]}
     warnings = validate_standard_formats(data)
-    assert len(warnings) == 3
+    assert len(warnings) == 2
     for w in warnings:
         assert w["type"] == "UNRECOGNIZED_STANDARD_FORMAT"
+        assert w["severity"] == "LOW"  # downgraded from MEDIUM
 
 
 def test_standard_ignores_short_values():

@@ -325,12 +325,23 @@ _STANDARD_PATTERNS = [
     re.compile(r"^AS\d+(?:[-/]\d+[A-Z]?)?", re.IGNORECASE),
     # ASME Y14.5, ASME B46.1
     re.compile(r"^ASME[-\s]+[A-Z]\d+(?:\.\d+)?", re.IGNORECASE),
+    # ANSI (dimensioning, screw threads): ANSI Y14.5M, ANSI 14.5M - 1982, ANSI B18.3
+    re.compile(r"^ANSI[-.\s]+[A-Z]?\d+(?:\.\d+[A-Z]?)?", re.IGNORECASE),
     # DIN, EN (European)
     re.compile(r"^(?:DIN|EN)[-\s]*\d{2,}", re.IGNORECASE),
     # GEN_ (RAFAEL material spec)
     re.compile(r"^GEN[-_]\d+", re.IGNORECASE),
     # ECSS (European Space), JIS (Japan), BS (British)
     re.compile(r"^(?:ECSS|JIS|BS)[-\s]*[A-Z]?\d+", re.IGNORECASE),
+    # Internal / proprietary document IDs with separator:
+    # AMAT (0250-01019), IAI (5902Y004-001, DWG.1002A315-001), KLA (905-610019-007),
+    # KRETOS (I-630028, I-630028 STEP 1,2).
+    # Pattern: 0-4 letter prefix + optional separator + 2+ digits + alphanumeric tail
+    # + optional second group (digits after separator).
+    re.compile(
+        r"^[A-Z]{0,4}[-./]?\d{2,}[A-Z0-9]*(?:[-./\s,][A-Z0-9][\w\s.,/-]*)?",
+        re.IGNORECASE,
+    ),
 ]
 
 # ערכים שמופיעים כ"תקן" אבל הם בעצם תוויות — לא לדגל
@@ -377,15 +388,18 @@ def validate_standard_formats(report_json: dict) -> list[dict]:
                     "suggestion": "בדוק את הספרה המקורית בשרטוט",
                 })
             continue
-        # לא תואם אף דפוס
+        # לא תואם אף דפוס — LOW severity בלבד, כי תקני פנים־חברה
+        # לא סטנדרטיים אבל לגיטימיים (AMAT / IAI / KLA / KRETOS). הדגל שימושי
+        # יותר יחד עם STANDARD_NOT_IN_OCR מאשר לבד.
         warnings.append({
             "type": "UNRECOGNIZED_STANDARD_FORMAT",
-            "severity": "MEDIUM",
+            "severity": "LOW",
             "source": "standards",
             "value": val[:100],
             "message": (
-                f"התקן '{val[:60]}' לא בפורמט שגרתי (MIL/AMS/ASTM/ISO/QQ/PS/...). "
-                f"ייתכן שגיאת OCR או תקן לא־סטנדרטי."
+                f"התקן '{val[:60]}' לא בפורמט שגרתי (MIL/AMS/ASTM/ISO/QQ/PS/ANSI...). "
+                f"ייתכן שגיאת OCR, תקן פנימי של חברה, או הזיה. "
+                f"אם גם מופיעה אזהרת STANDARD_NOT_IN_OCR — סימן חזק יותר."
             ),
             "suggestion": "אמת מול השרטוט.",
         })

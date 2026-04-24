@@ -37,7 +37,9 @@ logger = logging.getLogger(__name__)
 #     סינון process entries ריקים
 # v10: PS-TILDOCS/RAFDOCS בפורמט תקנים, numeric PN מ-filename,
 #      OCR grounding מטפל ב-PN טוקן-יחיד
-CACHE_VERSION = "v10"
+# v11: ANSI + internal doc IDs (AMAT/IAI/KLA/KRETOS) בפורמטים מוכרים;
+#      UNRECOGNIZED_STANDARD_FORMAT הופחת ל-LOW severity
+CACHE_VERSION = "v11"
 
 _CACHE_DIR = Path("output/.cache")
 
