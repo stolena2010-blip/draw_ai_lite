@@ -35,7 +35,9 @@ logger = logging.getLogger(__name__)
 #     — תוצאות ישנות חסרות את האזהרות החדשות
 # v9: Tier 1+2 — Elbit UN prefix, standard format, OCR grounding,
 #     סינון process entries ריקים
-CACHE_VERSION = "v9"
+# v10: PS-TILDOCS/RAFDOCS בפורמט תקנים, numeric PN מ-filename,
+#      OCR grounding מטפל ב-PN טוקן-יחיד
+CACHE_VERSION = "v10"
 
 _CACHE_DIR = Path("output/.cache")
 

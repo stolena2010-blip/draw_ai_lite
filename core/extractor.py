@@ -85,6 +85,11 @@ _PN_BLACKLIST = {"CAGE", "DWG", "DRAW", "DATE", "NOTES", "QTY", "SIZE",
 
 _PN_PATTERN = re.compile(r"\b([A-Z]{2,4}[A-Z0-9]{0,3}\d{2,}[A-Z0-9]*)\b")
 
+# Compound numeric PNs: "30-173803", "915-80-00586-00", "408-2119-00"
+# דורש 2+ קבוצות ספרות עם מקף. אחרי חילוץ נסנן בקוד לפי מספר ספרות כולל >= 6
+# (כדי לא לתפוס מידות כמו "10-20").
+_NUMERIC_PN_PATTERN = re.compile(r"\b\d+(?:-\d+){1,5}\b")
+
 
 def _extract_pn_from_filename(filename: str) -> str:
     """מנסה למצוא מספר פריט בשם הקובץ (זהיר — מסנן blacklist + עדיפות whitelist)."""
@@ -115,6 +120,14 @@ def _extract_pn_from_filename(filename: str) -> str:
                 continue
             candidates.append(m)
     if not candidates:
+        # Fallback לשמות קובץ שכולם ספרות (NN-NNNN-NN וכד')
+        # לוקחים את ההתאמה הראשונה לפני parens (מסנן metadata-ID בסוף)
+        before_paren = re.split(r"[()]", stem, maxsplit=1)[0]
+        for m in _NUMERIC_PN_PATTERN.findall(before_paren):
+            # לפחות 6 ספרות כוללות — מסנן מידות כמו "10-20"
+            digit_count = sum(1 for c in m if c.isdigit())
+            if digit_count >= 6:
+                return m
         return ""
     # עדיפות ל-prefix מוכר
     for c in candidates:

@@ -311,10 +311,11 @@ _STANDARD_PATTERNS = [
     re.compile(r"^ISO[-\s]*\d{3,}", re.IGNORECASE),
     # QQ (legacy US mil-spec): QQ-P-416, QQ-Z-325, QQ-S-365
     re.compile(r"^QQ[-\s]*[A-Z][-\s]*\d{2,}", re.IGNORECASE),
-    # RAFAEL PS: PS-111.21, PS 111.24
-    re.compile(r"^PS[-\s]*\d+(?:\.\d+)?", re.IGNORECASE),
-    # RAFAEL RAFDOCS
-    re.compile(r"^RAFDOCS[-\s]*\d+", re.IGNORECASE),
+    # RAFAEL PS family: PS-111.21, PS 111.24, PS-TILDOCS#172373,
+    # PS-RAFDOCS-434847, PS-38-576104
+    re.compile(r"^PS[-\s]*(?:[A-Z]+[-#\s]*)?\d+", re.IGNORECASE),
+    # RAFDOCS / TILDOCS / DOCS stand-alone
+    re.compile(r"^(?:[A-Z]{3,}DOCS|DOCS)[-#\s]*\d+", re.IGNORECASE),
     # FED-STD: FED-STD-595, FED-STD-101
     re.compile(r"^FED[-\s]*STD[-\s]*\d+", re.IGNORECASE),
     # A-A (commercial item description)
@@ -539,22 +540,35 @@ def validate_ocr_grounded(report_json: dict, ocr_text: str,
                 "suggestion": "אמת שהתקן אכן כתוב בשרטוט המקורי.",
             })
 
-    # 2. P/N
+    # 2. P/N — גם טוקן יחיד אם הוא מספיק ארוך (מזהה קומפקטי כמו "31073803")
     pn = (report_json.get("part_number") or "").strip()
     if pn:
         ratio, n = _coverage_ratio(pn, ocr_tokens)
-        # 2+ טוקנים (לא סתם "A" או "B"), <50% כיסוי = חשוד
-        if n >= 2 and ratio < 0.5:
+        # ≥1 טוקן משמעותי (≥3 תווים), 0% כיסוי — PN לא מופיע בכלל ב-OCR
+        if n >= 1 and ratio == 0:
             warnings.append({
                 "type": "PN_NOT_IN_OCR",
                 "severity": "HIGH",
                 "source": "title_block",
                 "value": pn,
                 "message": (
-                    f"P/N '{pn}' לא נמצא בטקסט OCR ({ratio:.0%} כיסוי). "
+                    f"P/N '{pn}' לא נמצא בטקסט OCR. "
                     f"ייתכן הזיה או שגיאת OCR חמורה — בדוק ידנית."
                 ),
                 "suggestion": "אמת מול כותרת השרטוט.",
+            })
+        # ≥2 טוקנים, כיסוי חלקי (<50%) — חלק מה-PN מופיע, חלק לא
+        elif n >= 2 and ratio < 0.5:
+            warnings.append({
+                "type": "PN_PARTIALLY_IN_OCR",
+                "severity": "MEDIUM",
+                "source": "title_block",
+                "value": pn,
+                "message": (
+                    f"רק {ratio:.0%} מה-P/N '{pn}' מופיע ב-OCR — "
+                    f"ייתכן שגיאת OCR בחלק מהתווים."
+                ),
+                "suggestion": "בדוק מול כותרת השרטוט.",
             })
 
     # 3. שמות יצרני צבע (brands ב-painting_processes)
