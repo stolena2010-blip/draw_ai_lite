@@ -184,16 +184,16 @@ def save_batch_to_excel(drawings: list[dict], path: Path) -> Path:
 
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         # ─── Summary ───
+        # openpyxl דורש לפחות גיליון אחד — כותבים תמיד, גם אם ריק
         rows = []
         for d in drawings:
             if not isinstance(d, dict):
                 continue
             row = {k: d.get(k, "") for k in summary_cols}
             rows.append(row)
-        if rows:
-            pd.DataFrame(rows, columns=summary_cols).to_excel(
-                writer, sheet_name="Summary", index=False
-            )
+        pd.DataFrame(rows, columns=summary_cols).to_excel(
+            writer, sheet_name="Summary", index=False
+        )
 
         # ─── Coatings ───
         _write_batch_process_sheet(writer, "Coatings", drawings, "coating_processes")

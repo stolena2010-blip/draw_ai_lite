@@ -6,7 +6,30 @@
 
 ---
 
-## [Unreleased] — 23/04/2026
+## [Unreleased] — 24/04/2026
+
+### 🔄 ריפקטור: מוד מכלולים משתמש ב-pipeline של שרטוט בודד
+- **מוד מכלולים** עכשיו רץ על `extract_drawing()` לכל PDF (Stage 1+2+3 +
+  התאמת מאסטרים), במקום pipeline נפרד מצומצם. דפדוף בין השרטוטים עם תצוגה
+  זהה למוד בודד. הוסר: ניתוח קשרי אבא/בן, עץ מוצר, תמונת Overview.
+- **נמחקו** — `core/assembly.py`, `core/assembly_prompts.py`,
+  `prompts/assembly/`, `build_assembly_pdf`, `build_tree_pdf`,
+  `build_tree_excel`, `build_assembly_excel`.
+- **חדש** — `ui_single_view.py` (רנדור משותף), `ui_admin.py` (פאנל מנהל),
+  `storage.save_handler.save_batch_to_excel()`,
+  `storage.pdf_report.build_batch_pdf()`.
+- **מיתוג ALGAT / GREEN COAT** — באנר + פלטת צבעים (`#7AB141` ירוק,
+  `#E89A2A` כתום) ברחבי ה-UI וב-PDF.
+- **Sanitize Excel** — `_sanitize_for_excel()` מסיר תווי בקרה
+  שגורמים ל-`IllegalCharacterError` של openpyxl.
+- **תיקון באג** — שיוך master_match לציפוי משתמש עכשיו במפתח מבני
+  (type_he/type/standard/thickness) במקום `id()` — עובד נכון גם
+  על תוצאה שנטענה מ-cache.
+- **`CACHE_VERSION`** v5 → v7 (שני bumps תוך כדי ריפקטור).
+
+---
+
+## [0.4.0] — 23/04/2026
 
 ### ✨ פירוט התאמה למאסטר (Match Breakdown)
 - **`build_match_details(coating, master, is_compound_layer=False)`** ב-

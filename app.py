@@ -5,22 +5,21 @@ DrawingAI Lite — Streamlit UI
 import logging
 from pathlib import Path
 
-import pandas as pd
 import streamlit as st
 
 from core.extractor import extract_drawing
 from core.azure_client import (
-    get_deployment, is_reasoning_model, 
-    save_runtime_settings, get_masters_xlsx_path,
-    is_fallback_enabled, enabled_modes, SUPPORTED_MODELS,
-    MODEL_GPT_4O, MODEL_GPT_5_4
+    get_deployment, is_reasoning_model, get_masters_xlsx_path, enabled_modes,
 )
-from core.cost_tracker import get_aggregate_stats
 from core.ocr_fallback import is_ocr_available
 from core.exceptions import format_error_for_ui, get_streamlit_level
 from ui_single_view import (
     render_drawing_result,
     render_save_section_single,
+)
+from ui_admin import (
+    maybe_open_admin_panel,
+    render_sidebar_footer,
 )
 
 # ═══════════════════════════════════════════════════════════════
@@ -132,7 +131,7 @@ st.markdown(
 _active = get_deployment()
 _badge = "🧠 Reasoning" if is_reasoning_model() else "👁️ Vision"
 
-_LOGO_PATH = Path(__file__).parent / "TEMPLATE FOR COLORS.png"
+_LOGO_PATH = Path(__file__).parent / "brand_banner.png"
 if _LOGO_PATH.exists():
     st.image(str(_LOGO_PATH), use_container_width=True)
 
@@ -148,10 +147,6 @@ st.markdown(
 # ═══════════════════════════════════════════════════════════════
 # סיידבר — מצב עבודה, הגדרות, מנהל, אודות
 # ═══════════════════════════════════════════════════════════════
-from core.azure_client import (
-    MODEL_GPT_4O, MODEL_GPT_5_4, SUPPORTED_MODELS,
-    _active_model, is_fallback_enabled, save_runtime_settings, enabled_modes,
-)
 
 with st.sidebar:
     # ─── בורר מצב עבודה ───
@@ -238,186 +233,12 @@ with st.sidebar:
 
 
 # ═══════════════════════════════════════════════════════════════
-# פאנל עלויות למנהל מערכת
+# פאנל מנהל + אזהרת Masters.xlsx חסר
 # ═══════════════════════════════════════════════════════════════
-@st.dialog("🛠️ פאנל מנהל מערכת", width="large")
-def _show_admin_cost_panel():
-    """פאנל מוסתר המציג את כל מידע העלויות והטוקנים."""
-    # ב-Single mode: result. ב-Assembly mode: asm_results (מחבר כולם)
-    r = st.session_state.get("result") or {}
-    asm_results = st.session_state.get("asm_results") or []
-    is_assembly = st.session_state.get("app_mode") == "assembly"
+maybe_open_admin_panel()
 
-    st.markdown("#### 📊 עלויות מצטברות (כל השרטוטים שנותחו)")
-    stats = get_aggregate_stats()
-    if stats:
-        a1, a2, a3 = st.columns(3)
-        a1.metric("שרטוטים שנותחו", stats["count"])
-        a2.metric("סה\"כ עלות", f"${stats['total_cost_usd']:.2f}")
-        a3.metric("ממוצע לשרטוט", f"${stats['avg_cost_usd']:.4f}")
-    else:
-        st.caption("עדיין לא נותחו שרטוטים")
-
-    st.divider()
-
-    if is_assembly and asm_results:
-        # ─── Assembly mode: עלות לכל שרטוט ───
-        st.markdown("#### 🎯 עלויות סשן המכלול")
-        total_usd = sum(
-            (res.get("_cost_info") or {}).get("total_cost_usd", 0)
-            for res in asm_results
-        )
-        total_ils = sum(
-            (res.get("_cost_info") or {}).get("total_cost_ils", 0)
-            for res in asm_results
-        )
-        t1, t2 = st.columns(2)
-        t1.metric("💰 סה\"כ עלות $", f"${total_usd:.4f}")
-        t2.metric("💱 סה\"כ בשקלים", f"₪{total_ils:.3f}")
-
-        for res in asm_results:
-            ci = res.get("_cost_info") or {}
-            if not ci:
-                continue
-            fname = res.get("source_filename", "שרטוט")
-            with st.expander(f"📄 {fname}", expanded=False):
-                c1, c2, c3 = st.columns(3)
-                c1.metric("💰 עלות $", f"${ci.get('total_cost_usd', 0):.4f}")
-                c2.metric("💱 בשקלים", f"₪{ci.get('total_cost_ils', 0):.3f}")
-                c3.metric(
-                    "🔤 טוקנים",
-                    f"{ci.get('input_tokens', 0):,} + {ci.get('output_tokens', 0):,}",
-                )
-                stages = ci.get("stages", [])
-                if stages:
-                    df = pd.DataFrame(stages)
-                    cols = [c for c in ["stage", "model", "input_tokens", "output_tokens", "total_cost_usd"] if c in df.columns]
-                    df = df[cols].rename(columns={
-                        "stage": "שלב", "model": "מודל בפועל",
-                        "input_tokens": "Input tokens",
-                        "output_tokens": "Output tokens",
-                        "total_cost_usd": "עלות $",
-                    })
-                    st.dataframe(df, use_container_width=True, hide_index=True)
-
-    else:
-        # ─── Single mode ───
-        cost_info = r.get("_cost_info", {})
-        if cost_info:
-            st.markdown("#### 🎯 עלות השרטוט הנוכחי")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("💰 עלות $", f"${cost_info.get('total_cost_usd', 0):.4f}")
-            c2.metric("💱 בשקלים", f"₪{cost_info.get('total_cost_ils', 0):.3f}")
-            c3.metric(
-                "🔤 טוקנים",
-                f"{cost_info.get('input_tokens', 0):,} + {cost_info.get('output_tokens', 0):,}",
-            )
-
-            st.markdown("##### פירוט לפי שלב")
-            stages = cost_info.get("stages", [])
-            if stages:
-                df = pd.DataFrame(stages)
-                cols = [c for c in ["stage", "model", "input_tokens", "output_tokens", "total_cost_usd"] if c in df.columns]
-                df = df[cols]
-                col_map = {
-                    "stage": "שלב",
-                    "model": "מודל בפועל",
-                    "input_tokens": "Input tokens",
-                    "output_tokens": "Output tokens",
-                    "total_cost_usd": "עלות $",
-                }
-                df = df.rename(columns=col_map)
-                st.dataframe(df, use_container_width=True, hide_index=True)
-        else:
-            st.caption("אין נתוני עלויות לשרטוט הנוכחי")
-
-    st.divider()
-    st.markdown("#### ⚙️ הגדרות מערכת (מנהל)")
-
-    _current_model = _active_model()
-    _model_idx = SUPPORTED_MODELS.index(_current_model) if _current_model in SUPPORTED_MODELS else 0
-    _model_label = {
-        MODEL_GPT_4O: "🟢 GPT-4o Vision (פשוט, מהיר)",
-        MODEL_GPT_5_4: "🧠 GPT-5.4 (Reasoning, חזק)",
-    }
-
-    cset1, cset2 = st.columns([2, 1])
-    with cset1:
-        _new_model = st.radio(
-            "מודל AI פעיל",
-            options=list(SUPPORTED_MODELS),
-            index=_model_idx,
-            format_func=lambda x: _model_label.get(x, x),
-            key="admin_active_model",
-        )
-    with cset2:
-        _new_fb = st.checkbox(
-            "Fallback אוטומטי",
-            value=is_fallback_enabled(),
-            key="admin_fallback",
-            help="מעבר אוטומטי למודל השני אם הראשי נכשל",
-        )
-
-    _current_modes = enabled_modes()
-    _mode_options = ["single", "assembly"]
-    _new_modes = st.multiselect(
-        "גישה למצבי עבודה",
-        options=_mode_options,
-        default=[m for m in _current_modes if m in _mode_options] or _mode_options,
-        format_func=lambda x: "🔍 שרטוט בודד" if x == "single" else "🧩 מכלולים מרובים",
-        key="admin_enabled_modes",
-        help="בחר אילו מצבים יוצגו למשתמש בממשק",
-    )
-
-    st.divider()
-    st.markdown("#### 📁 נתיבים")
-    _current_masters_path = get_masters_xlsx_path()
-    _new_masters_path = st.text_input(
-        "📄 נתיב ל-Masters.xlsx",
-        value=_current_masters_path,
-        placeholder="C:\\Data\\Masters.xlsx או השאר ריק לברירת מחדל",
-        help="נתיב מוחלט או יחסי לקובץ Masters.xlsx. אם ריק, יחפש ב-root ב-.env",
-        key="admin_masters_path",
-    )
-
-    if not _new_modes:
-        st.error("חובה לבחור לפחות מצב עבודה אחד")
-    else:
-        _settings_changed = (
-            _new_model != _current_model
-            or _new_fb != is_fallback_enabled()
-            or set(_new_modes) != set(_current_modes)
-            or _new_masters_path != _current_masters_path
-        )
-        if _settings_changed:
-            if st.button("💾 שמור הגדרות מערכת", use_container_width=True):
-                save_runtime_settings(
-                    active_model=_new_model,
-                    fallback_enabled=_new_fb,
-                    enabled_modes=_new_modes,
-                    masters_xlsx_path=_new_masters_path,
-                )
-                if st.session_state.get("app_mode") not in _new_modes:
-                    st.session_state["app_mode"] = _new_modes[0]
-                st.success("✅ הגדרות נשמרו")
-                st.rerun()
-        else:
-            st.caption("אין שינויים להגדרה")
-
-    if st.button("סגור", use_container_width=True):
-        st.session_state["_show_admin"] = False
-        st.rerun()
-
-
-if st.session_state.get("_show_admin"):
-    # מאפסים מיד את הדגל כדי שהדיאלוג ייפתח פעם אחת בלבד
-    st.session_state["_show_admin"] = False
-    _show_admin_cost_panel()
-
-# ─── אזהרה אם Masters.xlsx חסר ───
 _current_masters_full_path = get_masters_xlsx_path() or "Masters.xlsx"
 _current_masters_check = Path(_current_masters_full_path) if _current_masters_full_path else Path("Masters.xlsx")
-
 if not _current_masters_check.exists():
     st.warning(
         f"⚠️ קובץ **Masters.xlsx** חסר! התאמת מאסטרים לא תפעל.  \n\n"
@@ -429,25 +250,12 @@ if not _current_masters_check.exists():
 
 
 # ═══════════════════════════════════════════════════════════════
-# סרגל צד תחתון משותף — מנהל + קבצים שמורים
-# ═══════════════════════════════════════════════════════════════
-def _render_sidebar_footer():
-    with st.sidebar:
-        st.divider()
-        st.markdown("### 📊 פאנל מנהל")
-        if st.button("🛠️ פתח פאנל מנהל", use_container_width=True,
-                     key="open_admin_btn"):
-            st.session_state["_show_admin"] = True
-            st.rerun()
-
-
-# ═══════════════════════════════════════════════════════════════
 # ניתוב למצב מכלולים (Assembly)
 # ═══════════════════════════════════════════════════════════════
 if st.session_state.get("app_mode") == "assembly":
     from ui_assembly import render_assembly_mode
     render_assembly_mode(OUTPUT_DIR)
-    _render_sidebar_footer()
+    render_sidebar_footer()
     st.stop()
 
 
@@ -527,4 +335,4 @@ if st.session_state.result:
 # ─────────────────────────────────────
 # Sidebar — פאנל מנהל + קבצים שמורים
 # ─────────────────────────────────────
-_render_sidebar_footer()
+render_sidebar_footer()

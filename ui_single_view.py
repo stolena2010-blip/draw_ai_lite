@@ -14,6 +14,34 @@ from datetime import datetime
 
 import streamlit as st
 
+
+def _coating_match_key(c) -> tuple:
+    """מפתח מבני לציפוי לצורך שיוך מ-master_matches.
+
+    משתמש ב-type/type_he/standard/thickness במקום id() — עמיד בפני
+    round-trip דרך JSON (cache), שבו זהות האובייקט אובדת.
+    """
+    if not isinstance(c, dict):
+        return (str(c), "", "", "")
+    return (
+        (c.get("type_he") or "").strip(),
+        (c.get("type") or "").strip(),
+        (c.get("standard") or "").strip(),
+        (c.get("thickness") or "").strip(),
+    )
+
+
+def _build_match_lookup(master_matches: list) -> dict:
+    """בונה מיפוי מפתח־מבני → רשימת מאסטרים לכל ציפוי."""
+    lookup: dict = {}
+    for entry in master_matches or []:
+        if not isinstance(entry, dict):
+            continue
+        key = _coating_match_key(entry.get("coating"))
+        lookup.setdefault(key, entry.get("matches") or [])
+    return lookup
+
+
 _SEVERITY_ICON = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🟢"}
 
 _MATCH_ICON = {"full": "✅", "partial": "🟡", "none": "❌", "na": "⚪"}
@@ -272,7 +300,7 @@ def _render_overview_card(r: dict) -> None:
     ov_coats = r.get("coating_processes", []) or []
     ov_paints = r.get("painting_processes", []) or []
     ov_matches = r.get("master_matches", []) or []
-    ov_match_by_id = {id(e.get("coating")): e.get("matches", []) for e in ov_matches}
+    ov_match_by_key = _build_match_lookup(ov_matches)
     ov_add = r.get("additional_processes", []) or []
     ov_pkg = r.get("packaging_notes") or {}
     ov_pkg_he = (ov_pkg.get("he") or "").strip() if isinstance(ov_pkg, dict) else ""
@@ -292,7 +320,7 @@ def _render_overview_card(r: dict) -> None:
             bits.append(f'📜 <code>{std}</code>')
         if thick:
             bits.append(f'📏 <code>{thick}</code>')
-        top = ov_match_by_id.get(id(p)) or []
+        top = ov_match_by_key.get(_coating_match_key(p)) or []
         if top:
             m = top[0]
             sc = m.get("score", 0)
@@ -415,8 +443,8 @@ def _render_proc(item):
             st.markdown(f"- {text}")
 
 
-def _render_top_master_inline(coat_obj, matches_by_id) -> None:
-    top = matches_by_id.get(id(coat_obj)) or []
+def _render_top_master_inline(coat_obj, match_lookup) -> None:
+    top = match_lookup.get(_coating_match_key(coat_obj)) or []
     if not top:
         return
     m = top[0]
@@ -477,7 +505,7 @@ def _render_full_details(r: dict, key_prefix: str) -> None:
     # ═══ ציפויים, צביעות ותקנים ═══
     st.markdown("### 🎨 ציפויים, צביעות ותקנים")
     matches = r.get("master_matches", []) or []
-    matches_by_id = {id(entry.get("coating")): entry.get("matches", []) for entry in matches}
+    match_lookup = _build_match_lookup(matches)
 
     coatings = r.get("coating_processes", []) or []
     paintings = r.get("painting_processes", []) or []
@@ -485,12 +513,12 @@ def _render_full_details(r: dict, key_prefix: str) -> None:
         st.markdown("**ציפוי:**")
         for c in coatings:
             _render_proc(c)
-            _render_top_master_inline(c, matches_by_id)
+            _render_top_master_inline(c, match_lookup)
     if paintings:
         st.markdown("**צביעה:**")
         for p in paintings:
             _render_proc(p)
-            _render_top_master_inline(p, matches_by_id)
+            _render_top_master_inline(p, match_lookup)
     if not coatings and not paintings:
         st.caption("לא נמצאו תהליכי ציפוי/צביעה")
 

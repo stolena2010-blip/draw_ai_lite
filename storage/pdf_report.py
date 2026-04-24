@@ -29,6 +29,18 @@ def _ltr(s) -> str:
     return f'<bdi dir="ltr">{_h(s)}</bdi>'
 
 
+def _coating_match_key(c) -> tuple:
+    """מפתח מבני לציפוי (עמיד ל-JSON round-trip, שלא כמו id())."""
+    if not isinstance(c, dict):
+        return (str(c), "", "", "")
+    return (
+        (c.get("type_he") or "").strip(),
+        (c.get("type") or "").strip(),
+        (c.get("standard") or "").strip(),
+        (c.get("thickness") or "").strip(),
+    )
+
+
 _BASE_CSS = """
 <style>
   * { font-family: 'Arial', 'Segoe UI', sans-serif; }
@@ -99,7 +111,7 @@ def _wrap_rtl(inner_html: str) -> str:
     )
 
 
-_LOGO_PATH = Path(__file__).resolve().parent.parent / "TEMPLATE FOR COLORS.png"
+_LOGO_PATH = Path(__file__).resolve().parent.parent / "brand_banner.png"
 
 
 def _logo_html() -> str:
@@ -150,7 +162,7 @@ def _top_master_html(match: dict) -> str:
     )
 
 
-def _processes_table_html(title: str, items: list, matches_by_id: dict) -> str:
+def _processes_table_html(title: str, items: list, match_lookup: dict) -> str:
     """טבלה של ציפויים/צביעות + שורת מאסטר מוביל מתחת לכל שורה."""
     if not items:
         return ""
@@ -189,7 +201,7 @@ def _processes_table_html(title: str, items: list, matches_by_id: dict) -> str:
     for it in items:
         if not isinstance(it, dict):
             continue
-        top = matches_by_id.get(id(it)) or []
+        top = match_lookup.get(_coating_match_key(it)) or []
         if top:
             parts.append(_top_master_html(top[0]))
     return "".join(parts)
@@ -222,20 +234,26 @@ def _drawing_html(d: dict, idx: int, total: int) -> str:
 
     # מיפוי ציפוי → התאמות (לפי id של אובייקט הציפוי)
     matches = d.get("master_matches") or []
-    matches_by_id = {id(e.get("coating")): e.get("matches", []) for e in matches}
+    match_lookup = {}
+    for e in matches:
+        if isinstance(e, dict):
+            match_lookup.setdefault(
+                _coating_match_key(e.get("coating")),
+                e.get("matches") or [],
+            )
 
     # ציפויים + מאסטר מוביל
     parts.append(_processes_table_html(
         "🎨 ציפויים / טיפול שטח",
         d.get("coating_processes") or [],
-        matches_by_id,
+        match_lookup,
     ))
 
     # צביעות + מאסטר מוביל
     parts.append(_processes_table_html(
         "🖌️ צביעות",
         d.get("painting_processes") or [],
-        matches_by_id,
+        match_lookup,
     ))
 
     # תקנים נוספים שלא צמודים לתהליך

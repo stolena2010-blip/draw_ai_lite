@@ -92,30 +92,32 @@ DrawingLight/
 ├── ui_assembly.py          ← מסך 'מכלולים מרובים'
 ├── core/
 │   ├── azure_client.py     ← Azure OpenAI wrapper
-│   ├── ai_helpers.py       ← ★ חדש: call_vision/call_text/safe_call משותפים + retry
-│   ├── exceptions.py       ← ★ חדש: היררכיית custom exceptions (עברית ידידותית)
-│   ├── drawing_cache.py    ← ★ חדש: cache לפי MD5 (חיסכון ב-API)
+│   ├── ai_helpers.py       ← call_vision/call_text/safe_call + retry
+│   ├── exceptions.py       ← היררכיית custom exceptions (עברית ידידותית)
+│   ├── drawing_cache.py    ← cache לפי MD5 (חיסכון ב-API)
 │   ├── pdf_utils.py        ← PDF/Image → base64
-│   ├── prompts.py          ← Stage 1/2/3 prompts (בודד)
-│   ├── extractor.py        ← pipeline ראשי (בודד)
+│   ├── prompts.py          ← Stage 1/2/3 prompts
+│   ├── extractor.py        ← extract_drawing() — pipeline מלא (משותף לשני המודים)
 │   ├── master_matcher.py   ← התאמה למאסטרים (1239 פריטים)
 │   ├── cost_tracker.py     ← מעקב עלויות
 │   ├── ocr_fallback.py     ← Tesseract fallback
 │   ├── validators.py       ← ולידציה לאחר חילוץ (RAL/brands/coating/packing)
-│   ├── two_pass.py         ← השוואת שתי הרצות לשדות קריטיים
-│   ├── assembly_prompts.py ← פרומפטים למצב מכלולים + Overview Image
-│   └── assembly.py         ← pipeline מכלולים + ניתוח קשרים
+│   └── two_pass.py         ← השוואת שתי הרצות לשדות קריטיים
 ├── prompts/
-│   ├── single/             ← קבצי פרומפטים חיצוניים למצב שרטוט בודד
-│   └── assembly/           ← קבצי פרומפטים חיצוניים למצב מכלולים
+│   └── single/             ← קבצי פרומפטים חיצוניים (משמשים את שני המודים)
 ├── storage/
-│   ├── save_handler.py     ← JSON + Excel רב-גיליוני (6 sheets)
-│   └── pdf_report.py       ← דוחות PDF (מלא + עץ מוצר) + Excel עץ
+│   ├── save_handler.py     ← save_to_json/excel + save_batch_to_excel
+│   └── pdf_report.py       ← build_batch_pdf() — דוח PDF מאוחד
+├── app.py                  ← Streamlit main — router, sidebar, header
+├── ui_single_view.py       ← רנדור משותף של תוצאת שרטוט + כפתורי שמירה
+├── ui_assembly.py          ← מוד מכלולים: loop + pagination + batch exports
+├── ui_admin.py             ← פאנל מנהל (עלויות, הגדרות, מודל AI)
 ├── tests/
-│   ├── test_master_matcher.py  ← 26 בדיקות ל-Master Matcher
-│   └── test_exceptions.py      ← 20 בדיקות ל-exceptions (לא דורש pytest)
-├── output/                 ← תוצאות + costs.jsonl
-├── Masters.xlsx            ← מאגר ציפויים (חובה למצב 'בודד')
+│   ├── test_master_matcher.py  ← בדיקות ל-Master Matcher
+│   └── test_exceptions.py      ← בדיקות ל-exceptions
+├── output/                 ← תוצאות + costs.jsonl + .cache/
+├── Masters.xlsx            ← מאגר ציפויים (חובה להתאמת מאסטרים)
+├── brand_banner.png        ← לוגו ALGAT / GREEN COAT
 ├── requirements.txt
 ├── .env.example
 ├── PROJECT_OVERVIEW.md     ← סקירה מפורטת
