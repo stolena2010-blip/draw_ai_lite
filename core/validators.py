@@ -312,8 +312,8 @@ _STANDARD_PATTERNS = [
     # QQ (legacy US mil-spec): QQ-P-416, QQ-Z-325, QQ-S-365
     re.compile(r"^QQ[-\s]*[A-Z][-\s]*\d{2,}", re.IGNORECASE),
     # RAFAEL PS family: PS-111.21, PS 111.24, PS-TILDOCS#172373,
-    # PS-RAFDOCS-434847, PS-38-576104
-    re.compile(r"^PS[-\s]*(?:[A-Z]+[-#\s]*)?\d+", re.IGNORECASE),
+    # PS-RAFDOCS-434847, PS-38-576104, P.S.233100 (IAI variant with dots)
+    re.compile(r"^P\.?\s?S[-\s.]*(?:[A-Z]+[-#\s.]*)?\d+", re.IGNORECASE),
     # RAFDOCS / TILDOCS / DOCS stand-alone
     re.compile(r"^(?:[A-Z]{3,}DOCS|DOCS)[-#\s]*\d+", re.IGNORECASE),
     # FED-STD: FED-STD-595, FED-STD-101

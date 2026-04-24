@@ -201,32 +201,102 @@ def _proc_to_str(p) -> str:
     return str(p or "").strip()
 
 
-def _try_autocorrect_pn(stage1: dict, filename: str, ocr_text: str) -> tuple[str, str] | None:
-    """מתקן P/N אוטומטית אם שם הקובץ מופיע ב-OCR וה-P/N שחולץ לא.
+# OCR confusion pairs — תווים שמודלי Vision ו-OCR נוטים לבלבל ביניהם
+_OCR_CONFUSIONS = frozenset({
+    frozenset({"0", "O"}),
+    frozenset({"1", "I"}), frozenset({"1", "L"}), frozenset({"1", "l"}),
+    frozenset({"I", "L"}),
+    frozenset({"5", "S"}),
+    frozenset({"6", "G"}),
+    frozenset({"8", "B"}),
+    frozenset({"2", "Z"}),
+    frozenset({"3", "E"}),
+    frozenset({"4", "A"}),
+    frozenset({"M", "H"}),
+    frozenset({"N", "H"}),
+})
 
-    תנאים (כולם חייבים להתקיים):
-    1. יש מועמד P/N משם הקובץ.
-    2. ה-P/N שחולץ שונה מהמועמד משם הקובץ.
-    3. מועמד שם הקובץ מופיע ב-OCR text (לפחות 80% מהטוקנים).
-    4. ה-P/N שחולץ *לא* מופיע ב-OCR text (פחות מ-30% מהטוקנים).
+
+def _is_ocr_similar(s1: str, s2: str, max_edits: int = 2) -> bool:
+    """האם s1 ו-s2 דומים תחת שגיאות OCR שכיחות?
+
+    מחזיר True אם:
+    - אותו אורך + עד max_edits הבדלים, כולם מסיווגי OCR ידועים (0↔O, L↔I וכו'),
+      או
+    - אורך שונה בעד max_edits + הקצר הוא subsequence של הארוך
+      (insertion/deletion של ספרה/אות בודדת).
+    """
+    a, b = s1.upper(), s2.upper()
+    if a == b:
+        return False  # זהים — לא "דומים"
+    # Case 1: אותו אורך, סיווגים
+    if len(a) == len(b):
+        diffs = [(x, y) for x, y in zip(a, b) if x != y]
+        if 0 < len(diffs) <= max_edits:
+            return all(frozenset({x, y}) in _OCR_CONFUSIONS for x, y in diffs)
+        return False
+    # Case 2: אורך שונה — subsequence
+    if abs(len(a) - len(b)) <= max_edits:
+        longer, shorter = (a, b) if len(a) > len(b) else (b, a)
+        i = 0
+        for c in longer:
+            if i < len(shorter) and c == shorter[i]:
+                i += 1
+        return i == len(shorter)
+    return False
+
+
+def _try_autocorrect_pn(stage1: dict, filename: str, ocr_text: str) -> tuple[str, str] | None:
+    """מתקן P/N אוטומטית לפי 3 כללים (בסדר עדיפות):
+
+    כלל 1 — substring prefer-filename:
+      אם ה-P/N שחולץ הוא תת־מחרוזת של מועמד שם הקובץ, וה-candidate משמעותי
+      יותר (3+ תווים ארוך יותר) — העדף את ה-candidate (למשל: '421604' ⊂
+      'BLG421604-003').
+
+    כלל 2 — OCR substitution:
+      אם ה-candidate וה-extracted דומים תחת שגיאות OCR ידועות (0↔O, L↔I,
+      spare digit), העדף את ה-candidate גם אם ה-OCR טועה באותה צורה
+      (למשל BHO6031A→BH06031A, EI0498→EL0498).
+
+    כלל 3 — OCR grounding:
+      אם ה-candidate מופיע ב-OCR (≥80% כיסוי) וה-extracted לא (<30%),
+      העדף את ה-candidate.
 
     מחזיר (before, after) אם בוצע תיקון, או None אחרת.
     """
     extracted = (stage1.get("part_number") or "").strip()
     if not extracted:
         return None
-    if not ocr_text or len(ocr_text) < 50:
-        return None
     candidate = _extract_pn_from_filename(filename)
     if not candidate:
         return None
     if extracted.upper() == candidate.upper():
         return None
-    # אם מועמד שם הקובץ הוא תת־מחרוזת של ה-P/N שחולץ (או להפך) — כנראה שניהם תקינים
-    if candidate.upper() in extracted.upper() or extracted.upper() in candidate.upper():
+
+    def _apply_correction() -> tuple[str, str]:
+        stage1["part_number"] = candidate
+        dwg = (stage1.get("drawing_number") or "").strip()
+        if dwg.upper() == extracted.upper():
+            stage1["drawing_number"] = candidate
+        stage1["_pn_autocorrected_from"] = extracted
+        return (extracted, candidate)
+
+    # כלל 1: substring — filename יותר ספציפי
+    if extracted.upper() in candidate.upper() and len(candidate) - len(extracted) >= 3:
+        return _apply_correction()
+
+    # אם candidate הוא substring של extracted — extracted יותר מלא, לא לתקן
+    if candidate.upper() in extracted.upper():
         return None
 
-    # טוקניזציה
+    # כלל 2: OCR substitution similarity — גם אם OCR טעה באותה צורה
+    if _is_ocr_similar(extracted, candidate, max_edits=2):
+        return _apply_correction()
+
+    # כלל 3: OCR grounding — הכלל הישן
+    if not ocr_text or len(ocr_text) < 50:
+        return None
     ocr_upper = ocr_text.upper()
     ocr_tokens = set(re.findall(r"[A-Z0-9]+", ocr_upper))
     if len(ocr_tokens) < 20:
@@ -239,19 +309,8 @@ def _try_autocorrect_pn(stage1: dict, filename: str, ocr_text: str) -> tuple[str
             return 0.0
         return sum(1 for t in significant if t in ocr_tokens) / len(significant)
 
-    extracted_cov = _coverage(extracted)
-    candidate_cov = _coverage(candidate)
-
-    # מועמד שם הקובץ חייב להיות מאוד נוכח ב-OCR, והשחולץ — לא
-    if candidate_cov >= 0.8 and extracted_cov < 0.3:
-        stage1["part_number"] = candidate
-        # אם drawing_number היה זהה ל-extracted הישן — גם אותו נעדכן
-        dwg = (stage1.get("drawing_number") or "").strip()
-        if dwg.upper() == extracted.upper():
-            stage1["drawing_number"] = candidate
-        # סימון בשדה נסתר שהתבצע תיקון
-        stage1["_pn_autocorrected_from"] = extracted
-        return (extracted, candidate)
+    if _coverage(candidate) >= 0.8 and _coverage(extracted) < 0.3:
+        return _apply_correction()
     return None
 
 

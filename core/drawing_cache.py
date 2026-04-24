@@ -41,7 +41,11 @@ logger = logging.getLogger(__name__)
 #      UNRECOGNIZED_STANDARD_FORMAT הופחת ל-LOW severity
 # v12: Auto-correct P/N כאשר שם הקובץ מופיע ב-OCR וה-P/N שחולץ לא;
 #      הרחבת תוויות benign (ISO, N/A, NONE, FE/ZN 8, TYPE/CLASS)
-CACHE_VERSION = "v12"
+# v13: שיפורי Tier 1 —
+#      (1) OCR substitution similarity (0↔O, L↔I, insertion/deletion)
+#      (2) substring prefer-filename (421604 ⊂ BLG421604-003)
+#      (3) P.S.nnn variant (IAI עם נקודות)
+CACHE_VERSION = "v13"
 
 _CACHE_DIR = Path("output/.cache")
 
