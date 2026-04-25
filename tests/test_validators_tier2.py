@@ -325,6 +325,60 @@ def test_ocr_similar_rejects_too_many_edits():
     assert _is_ocr_similar("OLI", "01E") is False  # 3 edits > 2
 
 
+# ─── Filename extractor — single-letter prefix + compound + numeric ───────────
+
+def test_filename_single_letter_prefix():
+    """J35018A, Y80786A — אות יחידה בהתחלה."""
+    from core.extractor import _extract_pn_from_filename
+    assert _extract_pn_from_filename("J35018A-(132726).PDF") == "J35018A"
+    # Y80786A-00-01: alpha candidate + compound suffix
+    assert _extract_pn_from_filename("Y80786A-00-01-(145958).PDF") == "Y80786A-00-01"
+
+
+def test_filename_compound_suffix_appended():
+    """DD1000505-01-4 — alpha candidate + numeric suffix מצורף."""
+    from core.extractor import _extract_pn_from_filename
+    assert _extract_pn_from_filename("DD1000505-01-4-(123964).PDF") == "DD1000505-01-4"
+    assert _extract_pn_from_filename("DD1000506-01-4-(123965).PDF") == "DD1000506-01-4"
+
+
+def test_filename_compound_suffix_skips_letter_suffix():
+    """BN80760B-A — '-A' (אות, לא ספרה) לא מצורף ל-P/N."""
+    from core.extractor import _extract_pn_from_filename
+    # filename has alpha candidate + "-A" rev suffix
+    assert _extract_pn_from_filename("BN80760B-A-(134979).PDF") == "BN80760B"
+    # filename has alpha candidate + "-A-PD-..." → keeps just "BN80760B"
+    assert _extract_pn_from_filename(
+        "B2BDraw_BN80760B-A-PD-bn80760b_a.pdf_30.PDF"
+    ) == "BN80760B"
+
+
+def test_filename_pure_numeric_fallback():
+    """041310219 — שם קובץ מספרי לחלוטין."""
+    from core.extractor import _extract_pn_from_filename
+    assert _extract_pn_from_filename("041310219-(130973).PDF") == "041310219"
+
+
+def test_filename_with_bang_separator():
+    """32!032!0220 — שם קובץ עם '!' (גרסה מקולקלת של '.')."""
+    from core.extractor import _extract_pn_from_filename
+    # מקבלים את הגרסה הספרתית הצבורה
+    result = _extract_pn_from_filename("32!032!0220-(130933).PDF")
+    assert result  # לפחות לא ריק
+
+
+# ─── substring auto-correct — 2 char threshold ────────────────────────────────
+
+def test_autocorrect_substring_2_char_difference():
+    """DD1000506-01 → DD1000506-01-4 — תוספת של 2 תווים מספיקה לתיקון."""
+    from core.extractor import _try_autocorrect_pn
+    stage1 = {"part_number": "DD1000506-01"}
+    ocr = "DRAWING TEXT WITH MANY TOKENS NOT MATCHING THE PN " * 5
+    result = _try_autocorrect_pn(stage1, "DD1000506-01-4-(123965).PDF", ocr)
+    assert result == ("DD1000506-01", "DD1000506-01-4")
+    assert stage1["part_number"] == "DD1000506-01-4"
+
+
 # ─── OCR grounding — P/N as single token ──────────────────────────────────────
 
 def test_pn_single_token_not_in_ocr_flagged():

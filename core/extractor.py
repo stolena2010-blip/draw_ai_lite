@@ -83,12 +83,29 @@ _KNOWN_PN_PREFIXES = (
 _PN_BLACKLIST = {"CAGE", "DWG", "DRAW", "DATE", "NOTES", "QTY", "SIZE",
                  "REV", "SHEET", "SCALE", "TOLERANCE", "FINISH"}
 
-_PN_PATTERN = re.compile(r"\b([A-Z]{2,4}[A-Z0-9]{0,3}\d{2,}[A-Z0-9]*)\b")
+# P/N עם prefix של אותיות (1-4) ואחריו ספרות:
+# Y80786A (1+ספרות+אות), J35018A (1+ספרות+אות), BN80760B (2+ספרות+אות),
+# UAB2040574 (3+ספרות), BBLE1234X (4+ספרות).
+# הפחתנו מ-{2,4} ל-{1,4} כדי לתפוס PNs של רפאל/Elbit עם אות יחידה (Y, J, M).
+_PN_PATTERN = re.compile(r"\b([A-Z]{1,4}[A-Z0-9]{0,3}\d{2,}[A-Z0-9]*)\b")
 
 # Compound numeric PNs: "30-173803", "915-80-00586-00", "408-2119-00"
 # דורש 2+ קבוצות ספרות עם מקף. אחרי חילוץ נסנן בקוד לפי מספר ספרות כולל >= 6
 # (כדי לא לתפוס מידות כמו "10-20").
 _NUMERIC_PN_PATTERN = re.compile(r"\b\d+(?:-\d+){1,5}\b")
+
+# Pure-numeric PNs בלי מפרידים (041310219 — 9 ספרות רצופות).
+# מופיע רק כשה-stem (לפני parens של metadata) הוא רק ספרות.
+_PURE_NUMERIC_PN = re.compile(r"^\d{6,15}$")
+
+# הוספה של קבוצות ספרות אחרי alpha candidate ("DD1000506-01-4" → "DD1000506" + "-01-4")
+def _extend_with_compound_suffix(candidate: str, stem: str) -> str:
+    """אם candidate מופיע ב-stem ואחריו -\\d+(-\\d+)+, מחזיר את הצירוף המלא."""
+    pattern = re.escape(candidate) + r"(-\d+(?:-\d+)*)"
+    m = re.search(pattern, stem)
+    if m:
+        return candidate + m.group(1)
+    return candidate
 
 
 def _extract_pn_from_filename(filename: str) -> str:
@@ -103,39 +120,48 @@ def _extract_pn_from_filename(filename: str) -> str:
     # Elbit: קבצים בפורמט "un<digits>-..." — ה-"UN" הוא prefix URL-legacy,
     # לא חלק מה-P/N. מסירים אותו כדי לא להחזיר מועמד שגוי כמו "UN8554".
     stem = re.sub(r"^UN(?=\d)", "", stem)
-    # פיצול לסגמנטים לפי מקף, קו תחתון, סוגריים או # (Elbit)
-    segments = re.split(r"[-_()#\s]+", stem)
+    # פיצול לסגמנטים לפי מקף, קו תחתון, סוגריים, # (Elbit), או ! (corrupted)
+    segments = re.split(r"[-_()#!\s]+", stem)
     candidates: list[str] = []
     for seg in segments:
         for m in _PN_PATTERN.findall(seg):
             # דרישות:
-            # 1. אורך סביר (5-15)
+            # 1. אורך סביר (4-15) — הורדנו מ-5 ל-4 כי PNs קצרים כמו "Y80786A" קיימים
             # 2. גם אות וגם ספרה
             # 3. לא ברשימה השחורה
-            if not (5 <= len(m) <= 15):
+            if not (4 <= len(m) <= 15):
                 continue
             if m.isdigit() or not any(c.isalpha() for c in m):
                 continue
             if any(bl in m for bl in _PN_BLACKLIST):
                 continue
             candidates.append(m)
-    if not candidates:
-        # Fallback לשמות קובץ שכולם ספרות (NN-NNNN-NN וכד')
-        # לוקחים את ההתאמה הראשונה לפני parens (מסנן metadata-ID בסוף)
-        before_paren = re.split(r"[()]", stem, maxsplit=1)[0]
-        for m in _NUMERIC_PN_PATTERN.findall(before_paren):
-            # לפחות 6 ספרות כוללות — מסנן מידות כמו "10-20"
-            digit_count = sum(1 for c in m if c.isdigit())
-            if digit_count >= 6:
-                return m
-        return ""
-    # עדיפות ל-prefix מוכר
-    for c in candidates:
-        if c.startswith(_KNOWN_PN_PREFIXES):
-            return c
-    # אחרת — הארוך ביותר, אבל רק אם 6+ תווים (להיות זהירים)
-    longest = max(candidates, key=len)
-    return longest if len(longest) >= 6 else ""
+
+    # אם יש candidate alpha — בדוק אם יש לו suffix קומפאונד (DD1000506-01-4)
+    if candidates:
+        # עדיפות ל-prefix מוכר
+        for c in candidates:
+            if c.startswith(_KNOWN_PN_PREFIXES):
+                return _extend_with_compound_suffix(c, stem)
+        # אחרת — הארוך ביותר (לפחות 5 תווים)
+        longest = max(candidates, key=len)
+        if len(longest) >= 5:
+            return _extend_with_compound_suffix(longest, stem)
+
+    # Fallback 1: compound numeric ("30-173803-00", "915-80-00586-00")
+    before_paren = re.split(r"[()]", stem, maxsplit=1)[0]
+    for m in _NUMERIC_PN_PATTERN.findall(before_paren):
+        digit_count = sum(1 for c in m if c.isdigit())
+        if digit_count >= 6:
+            return m
+
+    # Fallback 2: pure numeric (041310219)
+    # רק אם ה-stem-לפני-parens הוא בדיוק ספרות (אחרי ניקוי מפרידים)
+    cleaned = re.sub(r"[-_!\s]+", "", before_paren).strip()
+    if _PURE_NUMERIC_PN.match(cleaned):
+        return cleaned
+
+    return ""
 
 
 def _reconcile_part_number(stage1: dict, filename: str) -> None:
@@ -282,8 +308,9 @@ def _try_autocorrect_pn(stage1: dict, filename: str, ocr_text: str) -> tuple[str
         stage1["_pn_autocorrected_from"] = extracted
         return (extracted, candidate)
 
-    # כלל 1: substring — filename יותר ספציפי
-    if extracted.upper() in candidate.upper() and len(candidate) - len(extracted) >= 3:
+    # כלל 1: substring — filename יותר ספציפי (≥2 תווים נוספים)
+    # ירדנו מ-3 ל-2 כדי לתפוס "DD1000506-01" → "DD1000506-01-4"
+    if extracted.upper() in candidate.upper() and len(candidate) - len(extracted) >= 2:
         return _apply_correction()
 
     # אם candidate הוא substring של extracted — extracted יותר מלא, לא לתקן

@@ -45,7 +45,12 @@ logger = logging.getLogger(__name__)
 #      (1) OCR substitution similarity (0↔O, L↔I, insertion/deletion)
 #      (2) substring prefer-filename (421604 ⊂ BLG421604-003)
 #      (3) P.S.nnn variant (IAI עם נקודות)
-CACHE_VERSION = "v13"
+# v14: שיפורי filename extractor —
+#      (1) prefix של אות יחידה (J35018A, Y80786A)
+#      (2) compound suffix מצורף (DD1000506-01-4)
+#      (3) pure numeric fallback (041310219)
+#      (4) substring threshold 3→2 (DD1000506-01 → DD1000506-01-4)
+CACHE_VERSION = "v14"
 
 _CACHE_DIR = Path("output/.cache")
 
