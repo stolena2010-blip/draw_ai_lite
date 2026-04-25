@@ -333,6 +333,22 @@ _STANDARD_PATTERNS = [
     re.compile(r"^GEN[-_]\d+", re.IGNORECASE),
     # ECSS (European Space), JIS (Japan), BS (British)
     re.compile(r"^(?:ECSS|JIS|BS)[-\s]*[A-Z]?\d+", re.IGNORECASE),
+    # AWS (American Welding Society): AWS D1.1:2020, AWS A5.18 ER70S-6
+    re.compile(r"^AWS[-.\s]+[A-Z]?\d+(?:\.\d+)?", re.IGNORECASE),
+    # AGMA (gear standards): AGMA 2015, AGMA 2000-A88
+    re.compile(r"^AGMA[-\s]*\d+", re.IGNORECASE),
+    # MS / NASM (Military Standard parts): MS24667-32, MS33540
+    re.compile(r"^MS[-\s]*\d{3,}", re.IGNORECASE),
+    # ANSI/ASQC Z1.4 (sampling): ANSI/ASQC 21.4, ANSI/ASQC Z1.4
+    re.compile(r"^ANSI[-/\s]*ASQC[-/\s]*[A-Z]?\d+(?:\.\d+)?", re.IGNORECASE),
+    # IDF (Israel Defense Forces): IDF HT"L SPEC 3030/8 CLASS 4, IDF SPEC ...
+    re.compile(r"^IDF[\s\"'/.A-Z-]*\d+", re.IGNORECASE),
+    # SAE-AMS-STD: SAE-AMS-STD-595, AMS-STD-2154
+    re.compile(r"^(?:SAE[-\s]+)?AMS[-\s]*STD[-\s]*\d+", re.IGNORECASE),
+    # ASTM-D (D series for materials): ASTM-D3951
+    re.compile(r"^ASTM[-\s]*D[-\s]*\d+", re.IGNORECASE),
+    # ROHS, REACH directives (legitimate references)
+    re.compile(r"^(?:ROHS|REACH)\b[\s\w]*", re.IGNORECASE),
     # Internal / proprietary document IDs with separator:
     # AMAT (0250-01019), IAI (5902Y004-001, DWG.1002A315-001), KLA (905-610019-007),
     # KRETOS (I-630028, I-630028 STEP 1,2).

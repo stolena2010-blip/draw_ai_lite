@@ -50,7 +50,9 @@ logger = logging.getLogger(__name__)
 #      (2) compound suffix מצורף (DD1000506-01-4)
 #      (3) pure numeric fallback (041310219)
 #      (4) substring threshold 3→2 (DD1000506-01 → DD1000506-01-4)
-CACHE_VERSION = "v14"
+# v15: הרחבת משפחות תקנים — AWS / AGMA / MS / ANSI-ASQC / IDF /
+#      SAE-AMS-STD / ASTM-D / ROHS / REACH
+CACHE_VERSION = "v15"
 
 _CACHE_DIR = Path("output/.cache")
 

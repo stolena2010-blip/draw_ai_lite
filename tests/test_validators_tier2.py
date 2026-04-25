@@ -379,6 +379,58 @@ def test_autocorrect_substring_2_char_difference():
     assert stage1["part_number"] == "DD1000506-01-4"
 
 
+# ─── New standard families: AWS / AGMA / MS / IDF / etc. ──────────────────────
+
+def test_standard_accepts_aws():
+    """AWS welding standards: D1.1:2020, A5.18 ER70S-6."""
+    from core.validators import validate_standard_formats
+    data = {"standards": ["AWS D1.1:2020", "AWS A5.18 ER70S-6", "AWS A2.4"]}
+    assert validate_standard_formats(data) == []
+
+
+def test_standard_accepts_agma():
+    from core.validators import validate_standard_formats
+    data = {"standards": ["AGMA 2015", "AGMA 2000-A88"]}
+    assert validate_standard_formats(data) == []
+
+
+def test_standard_accepts_ms_parts():
+    """MS24667-32, MS33540 — Military Standard parts."""
+    from core.validators import validate_standard_formats
+    data = {"standards": ["MS 24667-32", "MS33540", "MS-21209"]}
+    assert validate_standard_formats(data) == []
+
+
+def test_standard_accepts_ansi_asqc():
+    from core.validators import validate_standard_formats
+    data = {"standards": ["ANSI/ASQC 21.4", "ANSI/ASQC Z1.4"]}
+    assert validate_standard_formats(data) == []
+
+
+def test_standard_accepts_idf():
+    from core.validators import validate_standard_formats
+    data = {"standards": ['IDF HT"L SPEC 3030/8 CLASS 4', "IDF SPEC 1234"]}
+    assert validate_standard_formats(data) == []
+
+
+def test_standard_accepts_sae_ams_std():
+    from core.validators import validate_standard_formats
+    data = {"standards": ["SAE-AMS-STD-595", "AMS-STD-2154"]}
+    assert validate_standard_formats(data) == []
+
+
+def test_standard_accepts_astm_d_series():
+    from core.validators import validate_standard_formats
+    data = {"standards": ["ASTM-D3951", "ASTM D6386"]}
+    assert validate_standard_formats(data) == []
+
+
+def test_standard_accepts_rohs_reach():
+    from core.validators import validate_standard_formats
+    data = {"standards": ["ROHS DIRECTIVE", "REACH COMPLIANT", "ROHS"]}
+    assert validate_standard_formats(data) == []
+
+
 # ─── OCR grounding — P/N as single token ──────────────────────────────────────
 
 def test_pn_single_token_not_in_ocr_flagged():
